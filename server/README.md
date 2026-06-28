@@ -58,10 +58,33 @@ Para deixar ainda mais veloz, ajuste no `docker-compose.yml`:
 
 - `VIDEO_PRESET=ultrafast` — encoda o mais rápido possível (arquivo um pouco maior).
 - `MAX_HEIGHT=720` — processa/baixa mais rápido (720p é ótimo para celular).
-- **GPU (placa de vídeo):** se o notebook tiver:
-  - NVIDIA: `VIDEO_ENCODER=h264_nvenc` (precisa rodar o Docker com `--gpus all`
-    e a imagem NVIDIA do FFmpeg). Fica **5–10× mais rápido**.
-  - Intel/AMD: `VIDEO_ENCODER=h264_qsv` (Quick Sync).
+- **Aceleração por HARDWARE (tipo CapCut):** usa o chip de vídeo da CPU/GPU.
+  Renderiza um clipe de ~16s em **menos de 1 segundo**.
+
+### Intel (Quick Sync / VAAPI) — ideal para PCs com Intel (ex.: i3 7ª gen)
+
+Seu i3 de 7ª geração tem **Quick Sync**, que faz o encode em hardware. No `docker-compose.yml`:
+
+1. Descomente no serviço:
+   ```yaml
+   VIDEO_ENCODER: "h264_vaapi"
+   LIBVA_DRIVER_NAME: "iHD"
+   ```
+2. Descomente o bloco que passa a placa de vídeo:
+   ```yaml
+   devices:
+     - /dev/dri:/dev/dri
+   ```
+3. `docker compose up -d --build`
+
+A imagem já tenta instalar o driver Intel. Se der erro de processamento,
+volte para `VIDEO_ENCODER: libx264` + `VIDEO_PRESET: ultrafast` (CPU) — também é
+bem rápido.
+
+> **i3 7ª gen com 4 GB sobrando dá conta tranquilo** de clipes curtos. Para
+> garantir, deixe `MAX_HEIGHT: 1080` (ou 720) — também reduz a memória do boomerang.
+
+- **NVIDIA:** `VIDEO_ENCODER=h264_nvenc` (precisa runtime NVIDIA no Docker).
 
 Dica: numa festa, crie um **Wi‑Fi local** (roteador ou o hotspot do notebook),
 conecte o celular nele e use o IP do notebook em `PUBLIC_BASE_URL`. Os convidados

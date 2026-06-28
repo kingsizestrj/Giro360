@@ -36,6 +36,8 @@ const ENCODER = process.env.VIDEO_ENCODER || 'libx264';
 const PRESET = process.env.VIDEO_PRESET || 'veryfast';
 const CRF = process.env.VIDEO_CRF || '23';
 const MAX_HEIGHT = parseInt(process.env.MAX_HEIGHT || '0', 10); // 0 = sem limite
+const VAAPI_DEVICE = process.env.VAAPI_DEVICE || '/dev/dri/renderD128';
+const isVaapi = ENCODER.includes('vaapi');
 
 function vencArgs() {
   const a = ['-c:v', ENCODER];
@@ -43,6 +45,8 @@ function vencArgs() {
     a.push('-preset', PRESET, '-crf', CRF);
   } else if (ENCODER.includes('nvenc')) {
     a.push('-preset', 'p4', '-cq', CRF);
+  } else if (isVaapi) {
+    a.push('-qp', CRF);
   }
   return a;
 }
@@ -80,20 +84,25 @@ function ffmpegArgs(id, effect, fps) {
   const hasFrame = fs.existsSync(framePath(id));
   const hasMusic = fs.existsSync(musicPath(id));
 
-  const args = ['-y', '-i', input]; // [0] = vídeo
+  const args = [];
+  if (isVaapi) args.push('-vaapi_device', VAAPI_DEVICE); // aceleração Intel/AMD
+  args.push('-y', '-i', input); // [0] = vídeo
   let frameIdx = -1, musicIdx = -1, next = 1;
   if (hasFrame) { args.push('-i', framePath(id)); frameIdx = next++; }
   if (hasMusic) { args.push('-stream_loop', '-1', '-i', musicPath(id)); musicIdx = next++; }
 
-  // Cadeia de vídeo: efeito -> (moldura) -> yuv420p -> [vout]
+  // Limita a resolução CEDO (acelera e reduz a memória do reverse do boomerang).
+  const scale = MAX_HEIGHT > 0 ? `scale=-2:'min(ih,${MAX_HEIGHT})',` : '';
+
+  // Cadeia de vídeo: (escala) -> efeito -> (moldura) -> formato -> [vout]
   let fc;
   if (effect === 'boomerang') {
     // divide em duas cópias: uma normal e uma invertida, e concatena (ida+volta)
-    fc = `[0:v]fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
+    fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
   } else if (effect === 'slow') {
-    fc = `[0:v]setpts=2.0*PTS[fx];`;
+    fc = `[0:v]${scale}setpts=2.0*PTS[fx];`;
   } else {
-    fc = `[0:v]null[fx];`;
+    fc = `[0:v]${scale}null[fx];`;
   }
   let vlabel = '[fx]';
   if (hasFrame) {
@@ -101,9 +110,9 @@ function ffmpegArgs(id, effect, fps) {
     fc += `[${frameIdx}:v][fx]scale2ref=w=iw:h=ih[frm][base];[base][frm]overlay=0:0[ov];`;
     vlabel = '[ov]';
   }
-  // limita a resolução (opcional) para acelerar/reduzir tamanho
-  const scale = MAX_HEIGHT > 0 ? `scale=-2:'min(ih,${MAX_HEIGHT})',` : '';
-  fc += `${vlabel}${scale}format=yuv420p[vout]`;
+  // formato final: VAAPI sobe pra GPU (hwupload); senão yuv420p (compatível)
+  const finalFmt = isVaapi ? 'format=nv12,hwupload' : 'format=yuv420p';
+  fc += `${vlabel}${finalFmt}[vout]`;
   args.push('-filter_complex', fc, '-map', '[vout]');
 
   if (hasMusic) {

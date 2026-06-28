@@ -19,10 +19,15 @@ services:
       VIDEO_CRF: "23"
       # Limite de resolução (acelera e reduz tamanho). Ex.: 1080 ou 720. 0 = sem limite.
       MAX_HEIGHT: "1080"
-      # Aceleração por GPU (se o notebook/servidor tiver e o FFmpeg suportar):
-      #   NVIDIA: VIDEO_ENCODER=h264_nvenc   (precisa --gpus all no Docker)
-      #   Intel : VIDEO_ENCODER=h264_qsv
-      # VIDEO_ENCODER: "h264_nvenc"
+      # --- Aceleração por HARDWARE (recomendado p/ ficar "tipo CapCut") ---
+      # Intel (seu i3 7ª gen tem Quick Sync) via VAAPI: descomente as 2 linhas
+      # abaixo E o bloco "devices:" mais abaixo. Renderiza em ~1s.
+      # VIDEO_ENCODER: "h264_vaapi"
+      # LIBVA_DRIVER_NAME: "iHD"
+      #   NVIDIA: VIDEO_ENCODER=h264_nvenc (precisa runtime nvidia / --gpus all)
+    # Passa a placa de vídeo Intel para o container (necessário p/ VAAPI):
+    # devices:
+    #   - /dev/dri:/dev/dri
     volumes:
       - ./data:/data
 
