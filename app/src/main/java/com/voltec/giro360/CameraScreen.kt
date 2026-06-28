@@ -191,17 +191,32 @@ fun CameraScreen(
                     }
                     ui { busyMessage = "Enviando ao servidor… 0%" }
                     when (val result = CloudUploader.uploadJob(
-                        appCtx, sourcePath, curEffect.name.lowercase(), curFps, frameBytes, curMusic
+                        appCtx, sourcePath, curEffect.name.lowercase(), curFps,
+                        frameBytes, curMusic, eventId
                     ) { pct -> busyMessage = "Enviando ao servidor… $pct%" }) {
                         is CloudUploader.Result.Success -> {
                             EventStore.updateRecording(appCtx, saved.copy(shareUrl = result.url))
                             ui { qrUrl = result.url } // QR imediato; servidor processa em segundo plano
                         }
-                        is CloudUploader.Result.Error -> ui {
-                            Toast.makeText(
-                                appCtx, "Vídeo salvo. Falha no envio: ${result.message}",
-                                Toast.LENGTH_LONG
-                            ).show()
+                        is CloudUploader.Result.Error -> {
+                            // Falhou (ex.: Wi-Fi caiu) -> entra na fila de reenvio.
+                            UploadQueue.add(
+                                appCtx,
+                                UploadQueue.Job(
+                                    recId = saved.id, eventId = eventId, videoPath = sourcePath,
+                                    effect = curEffect.name.lowercase(), fps = curFps,
+                                    frameId = curFrameId,
+                                    customFrameUri = curCustomFrame?.toString(),
+                                    musicUri = curMusic?.toString()
+                                )
+                            )
+                            ui {
+                                Toast.makeText(
+                                    appCtx,
+                                    "Sem conexão com o servidor. Será reenviado automaticamente.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }
                 } else {
@@ -343,7 +358,12 @@ fun CameraScreen(
             }
             Spacer(Modifier.height(10.dp))
             // Chips de efeito (sempre visíveis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Effect.values().forEach { e ->
                     EffectChip(label = e.label, selected = effect == e, enabled = !isRecording) {
                         effect = e; persist()

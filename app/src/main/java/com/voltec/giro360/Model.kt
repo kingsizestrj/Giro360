@@ -3,8 +3,9 @@ package com.voltec.giro360
 /** Efeito aplicado ao vídeo gravado. */
 enum class Effect(val label: String) {
     NORMAL("Normal"),
-    SLOW("Câmera lenta"),
-    BOOMERANG("Boomerang")
+    SLOW("Lento"),
+    BOOMERANG("Boomerang"),
+    REVERSE("Reverso")
 }
 
 /** Um evento (festa, casamento, etc.) que agrupa as gravações. */

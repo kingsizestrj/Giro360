@@ -58,6 +58,13 @@ object VideoProcessor {
                         current
                     }
             }
+            Effect.REVERSE -> {
+                current = runCatching { makeReverse(current, boomerangFps, boomerangWidth, onStatus) }
+                    .getOrElse {
+                        Log.w(TAG, "Falha no reverso, mantendo vídeo normal", it)
+                        current
+                    }
+            }
             Effect.NORMAL -> {}
         }
         if (musicUri != null) {
@@ -170,6 +177,56 @@ object VideoProcessor {
             return outFile.absolutePath
         } finally {
             extractor.release()
+        }
+    }
+
+    /** Efeito reverso: reproduz o vídeo de trás pra frente (sem áudio). */
+    private fun makeReverse(
+        inputPath: String,
+        fps: Int,
+        maxWidth: Int,
+        onStatus: (String) -> Unit
+    ): String {
+        val retriever = MediaMetadataRetriever()
+        retriever.setDataSource(inputPath)
+        try {
+            val durMs = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: return inputPath
+            val durUs = durMs * 1000
+            val rotation = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+            )?.toIntOrNull() ?: 0
+
+            val clipUs = min(durUs, 12_000_000L)
+            val frameCount = ((clipUs / 1_000_000.0) * fps).toInt().coerceIn(2, 160)
+            val stepUs = clipUs / frameCount
+
+            val first = upright(frameAt(retriever, 0) ?: return inputPath, rotation)
+            val targetW = min(maxWidth, first.width).let { if (it % 2 == 0) it else it - 1 }
+            val targetH = (first.height * targetW.toFloat() / first.width)
+                .roundToInt().let { if (it % 2 == 0) it else it - 1 }
+            first.recycle()
+
+            val outFile = File(File(inputPath).parentFile, "rev_${File(inputPath).name}")
+            val encoder = Mp4FrameEncoder(targetW, targetH, fps, outFile)
+            var enc = 0
+            for (i in frameCount - 1 downTo 0) {
+                val raw = frameAt(retriever, i * stepUs) ?: continue
+                val up = upright(raw, rotation)
+                val scaled = if (up.width != targetW || up.height != targetH)
+                    Bitmap.createScaledBitmap(up, targetW, targetH, true) else up
+                if (scaled !== up) up.recycle()
+                encoder.encodeFrame(scaled)
+                scaled.recycle()
+                enc++
+                onStatus("Reverso… ${(enc * 100 / frameCount).coerceAtMost(99)}%")
+            }
+            encoder.finishAndMux()
+            File(inputPath).delete()
+            return outFile.absolutePath
+        } finally {
+            retriever.release()
         }
     }
 

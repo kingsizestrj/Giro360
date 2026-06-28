@@ -290,8 +290,14 @@ private fun WhatsAppDialog(rec: Recording, onUpdated: () -> Unit, onDismiss: () 
 private fun VideoThumb(rec: Recording, onClick: () -> Unit) {
     val context = LocalContext.current
     var thumb by remember(rec.id) { mutableStateOf<Bitmap?>(null) }
+    var status by remember(rec.id) { mutableStateOf<String?>(null) }
     LaunchedEffect(rec.id) {
         thumb = withContext(Dispatchers.IO) { loadThumbnail(rec.filePath) }
+    }
+    LaunchedEffect(rec.id, rec.shareUrl) {
+        if (rec.shareUrl != null) {
+            status = withContext(Dispatchers.IO) { CloudUploader.fetchStatus(rec.shareUrl) }
+        }
     }
     Box(
         Modifier
@@ -318,6 +324,21 @@ private fun VideoThumb(rec: Recording, onClick: () -> Unit) {
             modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
         ) {
             Text(rec.effect.label, color = Color.White, fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+        }
+        // Badge de status (servidor)
+        val (txt, col) = when {
+            rec.shareUrl == null -> "No celular" to Color(0xFF455A64)
+            status == "done" -> "Pronto" to Color(0xFF2E7D32)
+            status == "processing" -> "Processando" to Color(0xFFB8860B)
+            status == "error" -> "Erro" to Color(0xFFC62828)
+            else -> "Enviado" to Color(0xFF455A64)
+        }
+        Surface(
+            color = col, shape = RoundedCornerShape(6.dp),
+            modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)
+        ) {
+            Text(txt, color = Color.White, fontSize = 10.sp,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
         }
     }

@@ -92,6 +92,15 @@ object EventStore {
         writeRoot(context, root)
     }
 
+    fun findRecording(context: Context, recId: String): Recording? {
+        val arr = readRoot(context).optJSONArray("recordings") ?: return null
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            if (obj.optString("id") == recId) return recordingFromJson(obj)
+        }
+        return null
+    }
+
     fun updateRecording(context: Context, rec: Recording) {
         val root = readRoot(context)
         val arr = root.optJSONArray("recordings") ?: JSONArray()

@@ -1,5 +1,6 @@
 package com.voltec.giro360
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,10 +14,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,8 +38,21 @@ fun EventsScreen(
     var showCreate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
+    var pending by remember { mutableStateOf(UploadQueue.pendingCount(context)) }
+    var qrEvent by remember { mutableStateOf<Event?>(null) }
 
-    fun refresh() { events = EventStore.loadEvents(context) }
+    fun refresh() {
+        events = EventStore.loadEvents(context)
+        pending = UploadQueue.pendingCount(context)
+    }
+
+    // Reenvia pendentes ao abrir/voltar para a lista.
+    LaunchedEffect(Unit) {
+        GiroScope.io.launch {
+            UploadQueue.process(context.applicationContext)
+            withContext(Dispatchers.Main) { refresh() }
+        }
+    }
 
     Scaffold(
         containerColor = Prime.Bg,
@@ -89,12 +107,23 @@ fun EventsScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    if (pending > 0) {
+                        item {
+                            PendingBanner(pending) {
+                                GiroScope.io.launch {
+                                    UploadQueue.process(context.applicationContext)
+                                    withContext(Dispatchers.Main) { refresh() }
+                                }
+                            }
+                        }
+                    }
                     items(events, key = { it.id }) { e ->
                         EventCard(
                             event = e,
                             count = EventStore.recordingCount(context, e.id),
                             onRecord = { onOpenEvent(e.id) },
                             onGallery = { onOpenGallery(e.id) },
+                            onShowQr = { if (AppConfig.isConfigured(context)) qrEvent = e },
                             onDelete = { EventStore.deleteEvent(context, e.id); refresh() }
                         )
                     }
@@ -136,6 +165,51 @@ fun EventsScreen(
     if (showSettings) {
         ServerSettingsDialog(onDismiss = { showSettings = false })
     }
+
+    qrEvent?.let { ev ->
+        EventQrDialog(ev) { qrEvent = null }
+    }
+}
+
+@Composable
+private fun PendingBanner(count: Int, onRetry: () -> Unit) {
+    Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFF3A2E00), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.CloudUpload, null, tint = Color(0xFFFFC107))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "$count vídeo(s) aguardando envio",
+                color = Color.White, modifier = Modifier.weight(1f), fontSize = 14.sp
+            )
+            TextButton(onClick = onRetry) { Text("Reenviar") }
+        }
+    }
+}
+
+@Composable
+private fun EventQrDialog(event: Event, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val url = remember(event.id) { "${AppConfig.getServerUrl(context)}/e/${event.id}" }
+    val qr = remember(url) { ShareUtil.generateQr(url) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
+        title = { Text("QR do evento") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                qr?.let { Image(it.asImageBitmap(), "QR", Modifier.size(220.dp)) }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Escaneie para ver TODOS os vídeos de \"${event.name}\". " +
+                        "Bom para imprimir e deixar na mesa.",
+                    fontSize = 13.sp
+                )
+            }
+        }
+    )
 }
 
 @Composable
@@ -184,6 +258,7 @@ private fun EventCard(
     count: Int,
     onRecord: () -> Unit,
     onGallery: () -> Unit,
+    onShowQr: () -> Unit,
     onDelete: () -> Unit
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
@@ -208,6 +283,9 @@ private fun EventCard(
                         "${df.format(Date(event.createdAt))} • $count vídeo(s)",
                         color = Prime.TextDim, fontSize = 13.sp
                     )
+                }
+                IconButton(onClick = onShowQr) {
+                    Icon(Icons.Filled.QrCode2, "QR do evento", tint = Prime.Violet)
                 }
                 IconButton(onClick = { confirmDelete = true }) {
                     Icon(Icons.Filled.Delete, "Excluir", tint = Prime.TextDim)

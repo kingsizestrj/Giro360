@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -44,7 +45,13 @@ private sealed interface Screen {
 
 @Composable
 private fun Giro360App() {
+    val context = LocalContext.current
     var screen by remember { mutableStateOf<Screen>(Screen.Events) }
+
+    // Ao abrir o app, tenta reenviar o que ficou pendente (Wi-Fi que caiu, etc.).
+    LaunchedEffect(Unit) {
+        GiroScope.io.launch { UploadQueue.process(context.applicationContext) }
+    }
 
     BackHandler(enabled = screen !is Screen.Events) { screen = Screen.Events }
 

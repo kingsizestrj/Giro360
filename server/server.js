@@ -37,6 +37,7 @@ const PRESET = process.env.VIDEO_PRESET || 'veryfast';
 const CRF = process.env.VIDEO_CRF || '23';
 const MAX_HEIGHT = parseInt(process.env.MAX_HEIGHT || '0', 10); // 0 = sem limite
 const VAAPI_DEVICE = process.env.VAAPI_DEVICE || '/dev/dri/renderD128';
+const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '0', 10); // 0 = nunca apaga
 const isVaapi = ENCODER.includes('vaapi');
 
 function vencArgs() {
@@ -101,6 +102,8 @@ function ffmpegArgs(id, effect, fps) {
     fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
   } else if (effect === 'slow') {
     fc = `[0:v]${scale}setpts=2.0*PTS[fx];`;
+  } else if (effect === 'reverse') {
+    fc = `[0:v]${scale}reverse[fx];`;
   } else {
     fc = `[0:v]${scale}null[fx];`;
   }
@@ -277,6 +280,53 @@ function handlePage(req, res, id) {
   send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
 }
 
+// Galeria do evento: todos os vídeos prontos de um evento (QR único).
+function handleEventGallery(req, res, eventId) {
+  if (!isValidId(eventId)) return send(res, 404, 'Evento não encontrado');
+  let items = [];
+  try {
+    for (const f of fs.readdirSync(VIDEOS_DIR)) {
+      if (!f.endsWith('.json')) continue;
+      const m = readMeta(f.replace(/\.json$/, ''));
+      if (m && m.event === eventId && m.status === 'done') items.push(m);
+    }
+  } catch (e) {}
+  items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const cards = items.map((m) => `
+    <div class="card">
+      <video src="/raw/${m.id}" controls playsinline preload="metadata"></video>
+      <a class="dl" href="/dl/${m.id}">⬇️ Baixar</a>
+    </div>`).join('');
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vídeos do evento</title>
+<style>
+ body{margin:0;background:#0B0B0F;color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:16px}
+ h1{font-size:20px;text-align:center;margin:8px 0 16px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+ .card{background:#17171F;border-radius:12px;padding:8px;display:flex;flex-direction:column;align-items:center}
+ video{width:100%;border-radius:8px;background:#000}
+ a.dl{margin-top:8px;background:#8B5CF6;color:#fff;text-decoration:none;font-weight:bold;padding:8px 14px;border-radius:20px;font-size:14px}
+ p{color:#9a9aa8;text-align:center}
+</style></head><body>
+ <h1>🎬 Vídeos do evento</h1>
+ ${items.length ? `<div class="grid">${cards}</div>` : '<p>Nenhum vídeo pronto ainda. Volte daqui a pouco.</p>'}
+</body></html>`;
+  send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
+}
+
+// Apaga vídeos antigos (retenção) para não encher o disco.
+function cleanupOld() {
+  if (RETENTION_DAYS <= 0) return;
+  const cutoff = Date.now() - RETENTION_DAYS * 86400000;
+  try {
+    for (const f of fs.readdirSync(VIDEOS_DIR)) {
+      const fp = path.join(VIDEOS_DIR, f);
+      try { if (fs.statSync(fp).mtimeMs < cutoff) fs.unlinkSync(fp); } catch (e) {}
+    }
+  } catch (e) {}
+}
+
 // ---------- Roteamento ----------
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
@@ -292,13 +342,20 @@ const server = http.createServer((req, res) => {
       { 'Content-Type': 'application/json' });
   }
   if (req.method === 'GET' && p[0] === 'v' && p[1]) return handlePage(req, res, id2);
+  if (req.method === 'GET' && p[0] === 'e' && p[1]) return handleEventGallery(req, res, id2);
   if (req.method === 'GET' && p[0] === 'raw' && p[1]) return serveFile(req, res, id2, false);
   if (req.method === 'GET' && p[0] === 'dl' && p[1]) return serveFile(req, res, id2, true);
   if (req.method === 'GET' && p.length === 0) return send(res, 200, 'Prime360 server ok');
   send(res, 404, 'Não encontrado');
 });
 
+if (RETENTION_DAYS > 0) {
+  cleanupOld();
+  setInterval(cleanupOld, 6 * 3600 * 1000); // a cada 6h
+}
+
 server.listen(PORT, () => {
   console.log(`Prime360 server na porta ${PORT} (dados em ${VIDEOS_DIR})`);
   if (!API_KEY) console.warn('AVISO: API_KEY vazia — qualquer um pode enviar vídeos!');
+  if (RETENTION_DAYS > 0) console.log(`Retenção: apaga vídeos com mais de ${RETENTION_DAYS} dia(s).`);
 });

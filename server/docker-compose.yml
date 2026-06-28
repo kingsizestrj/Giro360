@@ -13,6 +13,7 @@ services:
       VIDEO_PRESET: "${VIDEO_PRESET:-veryfast}"
       VIDEO_CRF: "${VIDEO_CRF:-23}"
       MAX_HEIGHT: "${MAX_HEIGHT:-1080}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-0}"
       LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-iHD}"
     # Para aceleração Intel (VAAPI) descomente o bloco abaixo e defina
     # VIDEO_ENCODER=h264_vaapi no .env:
