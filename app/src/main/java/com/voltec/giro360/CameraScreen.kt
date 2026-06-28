@@ -79,6 +79,9 @@ fun CameraScreen(
     var customFrameUri by remember { mutableStateOf(ev.customFrameUri?.let { Uri.parse(it) }) }
     var musicUri by remember { mutableStateOf(ev.musicUri?.let { Uri.parse(it) }) }
     var musicName by remember { mutableStateOf(ev.musicName) }
+    var boomFps by remember { mutableStateOf(ev.boomerangFps) }
+    var boomClipMs by remember { mutableStateOf(ev.boomerangClipMs) }
+    var boomWidth by remember { mutableStateOf(ev.boomerangWidth) }
 
     // Salva as configurações no evento sempre que algo muda
     fun persist() {
@@ -86,6 +89,9 @@ fun CameraScreen(
             effect = effect,
             durationSeconds = duration,
             countdownSeconds = countdownSeconds,
+            boomerangFps = boomFps,
+            boomerangClipMs = boomClipMs,
+            boomerangWidth = boomWidth,
             frameId = frameId,
             customFrameUri = customFrameUri?.toString(),
             musicUri = musicUri?.toString(),
@@ -152,13 +158,18 @@ fun CameraScreen(
         val appCtx = context.applicationContext
         val curEffect = effect
         val curMusic = musicUri
+        val curFps = boomFps
+        val curClip = boomClipMs
+        val curW = boomWidth
         // Roda num escopo de aplicação (GiroScope): processamento, gravação e upload
         // terminam mesmo se o usuário sair da tela — nada de vídeo perdido.
         GiroScope.io.launch {
             suspend fun ui(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
             try {
                 ui { busyMessage = "Processando vídeo…" }
-                val finalPath = VideoProcessor.process(appCtx, sourcePath, curEffect, curMusic)
+                val finalPath = VideoProcessor.process(
+                    appCtx, sourcePath, curEffect, curMusic, curFps, curClip, curW
+                ) { s -> busyMessage = s }
                 var saved = com.voltec.giro360.Recording(
                     id = UUID.randomUUID().toString(),
                     eventId = eventId,
@@ -169,8 +180,10 @@ fun CameraScreen(
                 EventStore.addRecording(appCtx, saved)
 
                 if (AppConfig.isConfigured(appCtx)) {
-                    ui { busyMessage = "Enviando ao servidor…" }
-                    when (val result = CloudUploader.upload(appCtx, finalPath)) {
+                    ui { busyMessage = "Enviando ao servidor… 0%" }
+                    when (val result = CloudUploader.upload(appCtx, finalPath) { pct ->
+                        busyMessage = "Enviando ao servidor… $pct%"
+                    }) {
                         is CloudUploader.Result.Success -> {
                             saved = saved.copy(shareUrl = result.url)
                             EventStore.updateRecording(appCtx, saved)
@@ -294,6 +307,9 @@ fun CameraScreen(
                 effect = effect, onEffect = { effect = it; persist() },
                 duration = duration, onDuration = { duration = it; persist() },
                 countdown = countdownSeconds, onCountdown = { countdownSeconds = it; persist() },
+                boomFps = boomFps, onBoomFps = { boomFps = it; persist() },
+                boomClipMs = boomClipMs, onBoomClipMs = { boomClipMs = it; persist() },
+                boomWidth = boomWidth, onBoomWidth = { boomWidth = it; persist() },
                 frameId = frameId,
                 onFrame = { customFrameUri = null; frameId = it; persist() },
                 onPickFrame = { frameLauncher.launch("image/*") },
@@ -383,6 +399,9 @@ private fun SettingsPanel(
     effect: Effect, onEffect: (Effect) -> Unit,
     duration: Int, onDuration: (Int) -> Unit,
     countdown: Int, onCountdown: (Int) -> Unit,
+    boomFps: Int, onBoomFps: (Int) -> Unit,
+    boomClipMs: Int, onBoomClipMs: (Int) -> Unit,
+    boomWidth: Int, onBoomWidth: (Int) -> Unit,
     frameId: String?, onFrame: (String) -> Unit, onPickFrame: () -> Unit, onNoFrame: () -> Unit,
     musicName: String?, onPickMusic: () -> Unit, onClearMusic: () -> Unit,
     modifier: Modifier = Modifier
@@ -404,13 +423,38 @@ private fun SettingsPanel(
             }
             if (effect == Effect.BOOMERANG) {
                 Text("Boomerang: vídeo vai-e-volta (sem áudio)", color = Color(0xFFFFC107), fontSize = 11.sp)
+                Spacer(Modifier.height(6.dp))
+                Text("Velocidade: ${boomFps} fps", color = Color.White, fontSize = 13.sp)
+                Slider(
+                    value = boomFps.toFloat(), onValueChange = { onBoomFps(it.toInt()) },
+                    valueRange = 12f..30f, steps = 17
+                )
+                Text("Duração do trecho: ${"%.1f".format(boomClipMs / 1000f)}s",
+                    color = Color.White, fontSize = 13.sp)
+                Slider(
+                    value = boomClipMs.toFloat(), onValueChange = { onBoomClipMs((it / 100).toInt() * 100) },
+                    valueRange = 600f..2500f
+                )
+                Text("Qualidade", color = Color.White, fontSize = 13.sp)
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(360 to "Rápida", 480 to "Média", 720 to "Alta", 1080 to "Máxima")
+                        .forEach { (w, lbl) ->
+                            FilterChip(
+                                selected = boomWidth == w, onClick = { onBoomWidth(w) },
+                                label = { Text("$lbl (${w}p)") }
+                            )
+                        }
+                }
             }
             Spacer(Modifier.height(12.dp))
 
             Text("Duração: ${duration}s", color = Color.White, fontWeight = FontWeight.Bold)
             Slider(
                 value = duration.toFloat(), onValueChange = { onDuration(it.toInt()) },
-                valueRange = 3f..20f, steps = 16
+                valueRange = 1f..20f, steps = 18
             )
 
             Text("Contagem antes de gravar: ${countdown}s", color = Color.White, fontWeight = FontWeight.Bold)
@@ -484,27 +528,42 @@ private fun bindCamera(
     val preview = Preview.Builder().build().also {
         it.surfaceProvider = previewView.surfaceProvider
     }
-    val qualitySelector = if (slowMotion) {
-        QualitySelector.fromOrderedList(
-            listOf(Quality.UHD, Quality.FHD),
-            FallbackStrategy.higherQualityOrLowerThan(Quality.FHD)
-        )
-    } else {
-        QualitySelector.from(
-            Quality.HD, FallbackStrategy.higherQualityOrLowerThan(Quality.HD)
-        )
+    // Sempre a melhor qualidade que o aparelho oferecer (UHD > FHD > HD > SD).
+    val qualitySelector = QualitySelector.fromOrderedList(
+        listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
+        FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+    )
+    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+    // Estabilização de vídeo, se o aparelho suportar.
+    val stabSupported = try {
+        cameraSelector.filter(provider.availableCameraInfos)
+            .firstOrNull()?.isVideoStabilizationSupported() == true
+    } catch (e: Exception) { false }
+
+    fun buildVideoCapture(stab: Boolean): VideoCapture<Recorder> {
+        val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
+        val builder = VideoCapture.Builder(recorder)
+        if (stab) builder.setVideoStabilizationEnabled(true)
+        return builder.build()
     }
-    val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
-    val videoCapture = VideoCapture.withOutput(recorder)
+
     return try {
         provider.unbindAll()
-        val camera = provider.bindToLifecycle(
-            lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture
-        )
+        val videoCapture = buildVideoCapture(stabSupported)
+        val camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, videoCapture)
         videoCapture to camera
     } catch (e: Exception) {
-        Log.e(TAG, "Falha ao ligar câmera", e)
-        null to null
+        Log.e(TAG, "Falha ao ligar câmera; tentando sem estabilização", e)
+        try {
+            provider.unbindAll()
+            val videoCapture = buildVideoCapture(false)
+            val camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, videoCapture)
+            videoCapture to camera
+        } catch (e2: Exception) {
+            Log.e(TAG, "Falha ao ligar câmera", e2)
+            null to null
+        }
     }
 }
 

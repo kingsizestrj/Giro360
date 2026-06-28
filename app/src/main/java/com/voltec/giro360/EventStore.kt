@@ -130,6 +130,9 @@ object EventStore {
         put("effect", e.effect.name)
         put("durationSeconds", e.durationSeconds)
         put("countdownSeconds", e.countdownSeconds)
+        put("boomerangFps", e.boomerangFps)
+        put("boomerangClipMs", e.boomerangClipMs)
+        put("boomerangWidth", e.boomerangWidth)
         put("frameId", e.frameId ?: JSONObject.NULL)
         put("customFrameUri", e.customFrameUri ?: JSONObject.NULL)
         put("musicUri", e.musicUri ?: JSONObject.NULL)
@@ -143,6 +146,9 @@ object EventStore {
         effect = runCatching { Effect.valueOf(o.optString("effect", "SLOW")) }.getOrDefault(Effect.SLOW),
         durationSeconds = o.optInt("durationSeconds", 8),
         countdownSeconds = o.optInt("countdownSeconds", 5),
+        boomerangFps = o.optInt("boomerangFps", 20),
+        boomerangClipMs = o.optInt("boomerangClipMs", 1200),
+        boomerangWidth = o.optInt("boomerangWidth", 480),
         frameId = o.optStringOrNull("frameId"),
         customFrameUri = o.optStringOrNull("customFrameUri"),
         musicUri = o.optStringOrNull("musicUri"),

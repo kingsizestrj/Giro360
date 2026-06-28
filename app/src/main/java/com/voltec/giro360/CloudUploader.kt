@@ -21,7 +21,11 @@ object CloudUploader {
         data class Error(val message: String) : Result()
     }
 
-    fun upload(context: Context, filePath: String): Result {
+    fun upload(
+        context: Context,
+        filePath: String,
+        onProgress: (Int) -> Unit = {}
+    ): Result {
         val baseUrl = AppConfig.getServerUrl(context)
         if (baseUrl.isEmpty()) return Result.Error("Servidor não configurado")
         val apiKey = AppConfig.getApiKey(context)
@@ -37,14 +41,27 @@ object CloudUploader {
             conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
+                useCaches = false
                 connectTimeout = 15000
                 readTimeout = 60000
                 setRequestProperty("Content-Type", "video/mp4")
                 if (apiKey.isNotEmpty()) setRequestProperty("X-Api-Key", apiKey)
                 setFixedLengthStreamingMode(file.length())
             }
+            val total = file.length().coerceAtLeast(1)
             conn.outputStream.use { out ->
-                file.inputStream().use { input -> input.copyTo(out, 64 * 1024) }
+                file.inputStream().use { input ->
+                    val buf = ByteArray(256 * 1024)
+                    var sent = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        sent += n
+                        onProgress((sent * 100 / total).toInt())
+                    }
+                    out.flush()
+                }
             }
             val code = conn.responseCode
             if (code in 200..299) {

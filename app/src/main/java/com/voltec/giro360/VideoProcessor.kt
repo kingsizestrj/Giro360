@@ -2,6 +2,7 @@ package com.voltec.giro360
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -34,17 +35,24 @@ object VideoProcessor {
         context: Context,
         inputPath: String,
         effect: Effect,
-        musicUri: Uri?
+        musicUri: Uri?,
+        boomerangFps: Int = 20,
+        boomerangClipMs: Int = 1200,
+        boomerangWidth: Int = 480,
+        onStatus: (String) -> Unit = {}
     ): String {
         var current = inputPath
         if (effect == Effect.BOOMERANG) {
-            current = runCatching { makeBoomerang(current) }
+            current = runCatching {
+                makeBoomerang(current, boomerangFps, boomerangClipMs, boomerangWidth, onStatus)
+            }
                 .getOrElse {
                     Log.w(TAG, "Falha ao gerar boomerang, mantendo vídeo normal", it)
                     current
                 }
         }
         if (musicUri != null) {
+            onStatus("Juntando música…")
             current = runCatching { addMusic(context, current, musicUri) }
                 .getOrElse {
                     Log.w(TAG, "Falha ao adicionar música, mantendo áudio original", it)
@@ -58,50 +66,89 @@ object VideoProcessor {
      * Gera o efeito boomerang: reproduz os quadros na ida e depois na volta,
      * criando um loop "vai-e-volta". Recodifica num MP4 novo (sem áudio).
      */
-    private fun makeBoomerang(inputPath: String): String {
+    private fun makeBoomerang(
+        inputPath: String,
+        fps: Int,
+        clipMs: Int,
+        maxWidth: Int,
+        onStatus: (String) -> Unit
+    ): String {
         val retriever = MediaMetadataRetriever()
         retriever.setDataSource(inputPath)
+        val frames = ArrayList<Bitmap>()
         try {
             val durMs = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_DURATION
             )?.toLongOrNull() ?: return inputPath
             val durUs = durMs * 1000
+            // Rotação do vídeo (corrige boomerang saindo "deitado" 16:9).
+            val rotation = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+            )?.toIntOrNull() ?: 0
 
-            val fps = 18
-            // usa no máximo os primeiros 2,5s para manter o loop curto e leve
-            val clipUs = min(durUs, 2_500_000L)
-            val frameCount = ((clipUs / 1_000_000.0) * fps).toInt().coerceAtLeast(2)
-            val stepUs = clipUs / frameCount
-
-            val first = frameAt(retriever, 0) ?: return inputPath
-            // dimensões alvo (largura ~480, par, preservando proporção)
-            val targetW = min(480, first.width).let { if (it % 2 == 0) it else it - 1 }
+            val first = upright(frameAt(retriever, 0) ?: return inputPath, rotation)
+            val targetW = min(maxWidth, first.width).let { if (it % 2 == 0) it else it - 1 }
             val targetH = (first.height * targetW.toFloat() / first.width)
                 .roundToInt().let { if (it % 2 == 0) it else it - 1 }
             first.recycle()
 
+            val clipUs = min(durUs, clipMs * 1000L)
+            var frameCount = ((clipUs / 1_000_000.0) * fps).toInt().coerceIn(2, 90)
+            // Limita pela memória do cache de quadros para não estourar (OOM). O
+            // orçamento escala com a RAM do app: aparelho mais potente usa mais quadros.
+            val heapBudget = (Runtime.getRuntime().maxMemory() / 6)
+                .coerceIn(40_000_000L, 220_000_000L)
+            val bytesPerFrame = targetW.toLong() * targetH * 4
+            val maxByMem = (heapBudget / bytesPerFrame).toInt().coerceAtLeast(2)
+            if (frameCount > maxByMem) frameCount = maxByMem
+            val stepUs = clipUs / frameCount
+
+            // Decodifica, endireita e escala cada quadro UMA vez (cache) — reusado na volta.
+            onStatus("Boomerang… 0%")
+            for (i in 0 until frameCount) {
+                val raw = frameAt(retriever, i * stepUs) ?: continue
+                val up = upright(raw, rotation)
+                val scaled = if (up.width != targetW || up.height != targetH)
+                    Bitmap.createScaledBitmap(up, targetW, targetH, true) else up
+                if (scaled !== up) up.recycle()
+                frames.add(scaled)
+                onStatus("Boomerang… ${(i + 1) * 40 / frameCount}%")
+            }
+            if (frames.size < 2) return inputPath
+
             val outFile = File(File(inputPath).parentFile, "boom_${File(inputPath).name}")
             val encoder = Mp4FrameEncoder(targetW, targetH, fps, outFile)
-
+            val totalEnc = frames.size * 2 - 2
+            var enc = 0
             // ida
-            for (i in 0 until frameCount) {
-                val bmp = frameAt(retriever, i * stepUs) ?: continue
-                encoder.encodeFrame(bmp)
-                bmp.recycle()
+            for (f in frames) {
+                encoder.encodeFrame(f); enc++
+                onStatus("Boomerang… ${40 + enc * 60 / totalEnc}%")
             }
             // volta (sem repetir as pontas, pra não "travar" no loop)
-            for (i in frameCount - 2 downTo 1) {
-                val bmp = frameAt(retriever, i * stepUs) ?: continue
-                encoder.encodeFrame(bmp)
-                bmp.recycle()
+            for (i in frames.size - 2 downTo 1) {
+                encoder.encodeFrame(frames[i]); enc++
+                onStatus("Boomerang… ${40 + enc * 60 / totalEnc}%")
             }
             encoder.finishAndMux()
 
             File(inputPath).delete()
             return outFile.absolutePath
         } finally {
+            frames.forEach { it.recycle() }
             retriever.release()
         }
+    }
+
+    /** Endireita o quadro conforme a rotação do vídeo, se necessário. */
+    private fun upright(bmp: Bitmap, rotation: Int): Bitmap {
+        if ((rotation == 90 || rotation == 270) && bmp.width > bmp.height) {
+            val m = Matrix().apply { postRotate(rotation.toFloat()) }
+            val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+            if (rotated !== bmp) bmp.recycle()
+            return rotated
+        }
+        return bmp
     }
 
     private fun frameAt(retriever: MediaMetadataRetriever, timeUs: Long): Bitmap? =

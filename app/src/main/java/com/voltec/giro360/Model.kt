@@ -16,6 +16,10 @@ data class Event(
     val effect: Effect = Effect.SLOW,
     val durationSeconds: Int = 8,
     val countdownSeconds: Int = 5,      // contagem regressiva antes de gravar
+    // Parâmetros do boomerang (ajustáveis na hora)
+    val boomerangFps: Int = 20,         // velocidade do loop
+    val boomerangClipMs: Int = 1200,    // trecho usado (ida); total ~= 2x
+    val boomerangWidth: Int = 480,      // qualidade/largura do boomerang
     val frameId: String? = null,        // moldura embutida selecionada
     val customFrameUri: String? = null, // moldura escolhida da galeria
     val musicUri: String? = null,       // música de fundo escolhida
