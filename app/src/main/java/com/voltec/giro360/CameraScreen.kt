@@ -166,28 +166,24 @@ fun CameraScreen(
         GiroScope.io.launch {
             suspend fun ui(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
             try {
-                ui { busyMessage = "Processando vídeo…" }
-                val finalPath = VideoProcessor.process(
-                    appCtx, sourcePath, curEffect, curMusic, curFps, curW
-                ) { s -> busyMessage = s }
-                var saved = com.voltec.giro360.Recording(
-                    id = UUID.randomUUID().toString(),
-                    eventId = eventId,
-                    filePath = finalPath,
-                    createdAt = System.currentTimeMillis(),
-                    effect = curEffect
-                )
-                EventStore.addRecording(appCtx, saved)
-
                 if (AppConfig.isConfigured(appCtx)) {
+                    // MODO SERVIDOR: envia o vídeo BRUTO + efeito; o servidor processa
+                    // (FFmpeg) e o QR aparece na hora. Mantém uma cópia local.
+                    val saved = com.voltec.giro360.Recording(
+                        id = UUID.randomUUID().toString(),
+                        eventId = eventId,
+                        filePath = sourcePath,
+                        createdAt = System.currentTimeMillis(),
+                        effect = curEffect
+                    )
+                    EventStore.addRecording(appCtx, saved)
                     ui { busyMessage = "Enviando ao servidor… 0%" }
-                    when (val result = CloudUploader.upload(appCtx, finalPath) { pct ->
-                        busyMessage = "Enviando ao servidor… $pct%"
-                    }) {
+                    when (val result = CloudUploader.upload(
+                        appCtx, sourcePath, curEffect.name.lowercase(), curFps
+                    ) { pct -> busyMessage = "Enviando ao servidor… $pct%" }) {
                         is CloudUploader.Result.Success -> {
-                            saved = saved.copy(shareUrl = result.url)
-                            EventStore.updateRecording(appCtx, saved)
-                            ui { qrUrl = result.url } // mostra o QR automaticamente
+                            EventStore.updateRecording(appCtx, saved.copy(shareUrl = result.url))
+                            ui { qrUrl = result.url } // QR imediato; servidor processa em segundo plano
                         }
                         is CloudUploader.Result.Error -> ui {
                             Toast.makeText(
@@ -197,11 +193,26 @@ fun CameraScreen(
                         }
                     }
                 } else {
+                    // MODO LOCAL (sem servidor): processa o efeito no aparelho.
+                    ui { busyMessage = "Processando vídeo…" }
+                    val finalPath = VideoProcessor.process(
+                        appCtx, sourcePath, curEffect, curMusic, curFps, curW
+                    ) { s -> busyMessage = s }
+                    EventStore.addRecording(
+                        appCtx,
+                        com.voltec.giro360.Recording(
+                            id = UUID.randomUUID().toString(),
+                            eventId = eventId,
+                            filePath = finalPath,
+                            createdAt = System.currentTimeMillis(),
+                            effect = curEffect
+                        )
+                    )
                     ui { Toast.makeText(appCtx, "Vídeo salvo!", Toast.LENGTH_SHORT).show() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao finalizar o vídeo", e)
-                ui { Toast.makeText(appCtx, "Erro ao processar o vídeo", Toast.LENGTH_LONG).show() }
+                ui { Toast.makeText(appCtx, "Erro ao finalizar o vídeo", Toast.LENGTH_LONG).show() }
             } finally {
                 ui { busyMessage = null }
             }

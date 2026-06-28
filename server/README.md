@@ -1,18 +1,25 @@
-# Giro360 — Servidor de vídeos (Docker)
+# Prime360 — Servidor de vídeos (Docker)
 
-Servidor leve que recebe os vídeos enviados pelo app Giro360, guarda no seu
-servidor e gera um link/QR Code. Quando o cliente escaneia o QR, abre uma
-página com o vídeo dele e um botão **Baixar vídeo**.
+Servidor que recebe os vídeos do app Prime360, **aplica o efeito com FFmpeg**
+(boomerang, câmera lenta, etc.) e gera um link/QR Code. O QR aparece na hora;
+quando o cliente escaneia, vê "processando" e, ao terminar, o vídeo pronto para
+baixar.
 
-Feito em **Node puro (sem dependências)** — imagem Docker mínima.
+Feito em **Node puro + FFmpeg** — sem dependências npm.
 
 ## Como funciona
 
 ```
-App Giro360  --(POST /upload + X-Api-Key)-->  Servidor  --salva-->  /data/videos
-                                                  |
-Cliente escaneia QR --> GET /v/<id> --> página com preview + botão "Baixar vídeo"
+App Prime360 --(POST /upload?effect=boomerang + vídeo bruto)--> Servidor
+                                          | responde o link na HORA (QR)
+                                          | processa em 2º plano (FFmpeg)
+Cliente escaneia QR --> GET /v/<id>
+   - ainda processando -> página "Preparando seu vídeo…" (atualiza sozinha)
+   - pronto            -> preview + botão "Baixar vídeo"
 ```
+
+Os efeitos rodam no servidor (rápido e correto), então o celular só grava e
+envia — o QR sai instantâneo.
 
 ## Subir no seu servidor
 

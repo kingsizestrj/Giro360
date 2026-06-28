@@ -24,6 +24,8 @@ object CloudUploader {
     fun upload(
         context: Context,
         filePath: String,
+        effect: String = "normal",
+        fps: Int = 20,
         onProgress: (Int) -> Unit = {}
     ): Result {
         val baseUrl = AppConfig.getServerUrl(context)
@@ -34,7 +36,7 @@ object CloudUploader {
         if (!file.exists()) return Result.Error("Arquivo não encontrado")
 
         val name = Uri.encode(file.name)
-        val endpoint = "$baseUrl/upload?name=$name"
+        val endpoint = "$baseUrl/upload?name=$name&effect=${Uri.encode(effect)}&fps=$fps"
 
         var conn: HttpURLConnection? = null
         return try {
