@@ -40,13 +40,14 @@ const VAAPI_DEVICE = process.env.VAAPI_DEVICE || '/dev/dri/renderD128';
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '0', 10); // 0 = nunca apaga
 const isVaapi = ENCODER.includes('vaapi');
 
-function vencArgs() {
-  const a = ['-c:v', ENCODER];
-  if (ENCODER === 'libx264' || ENCODER === 'libx265') {
+function vencArgs(forceSoftware) {
+  const enc = forceSoftware ? 'libx264' : ENCODER;
+  const a = ['-c:v', enc];
+  if (enc === 'libx264' || enc === 'libx265') {
     a.push('-preset', PRESET, '-crf', CRF);
-  } else if (ENCODER.includes('nvenc')) {
+  } else if (enc.includes('nvenc')) {
     a.push('-preset', 'p4', '-cq', CRF);
-  } else if (isVaapi) {
+  } else if (enc.includes('vaapi')) {
     a.push('-qp', CRF);
   }
   return a;
@@ -78,7 +79,8 @@ function send(res, status, body, headers) {
 }
 
 // ---------- Processamento (FFmpeg) ----------
-function ffmpegArgs(id, effect, fps) {
+function ffmpegArgs(id, effect, fps, forceSoftware) {
+  const useVaapi = isVaapi && !forceSoftware;
   const f = Math.max(8, Math.min(60, parseInt(fps, 10) || 20));
   const input = rawPath(id);
   const output = finalPath(id);
@@ -86,7 +88,7 @@ function ffmpegArgs(id, effect, fps) {
   const hasMusic = fs.existsSync(musicPath(id));
 
   const args = [];
-  if (isVaapi) args.push('-vaapi_device', VAAPI_DEVICE); // aceleração Intel/AMD
+  if (useVaapi) args.push('-vaapi_device', VAAPI_DEVICE); // aceleração Intel/AMD
   args.push('-y', '-i', input); // [0] = vídeo
   let frameIdx = -1, musicIdx = -1, next = 1;
   if (hasFrame) { args.push('-i', framePath(id)); frameIdx = next++; }
@@ -114,7 +116,7 @@ function ffmpegArgs(id, effect, fps) {
     vlabel = '[ov]';
   }
   // formato final: VAAPI sobe pra GPU (hwupload); senão yuv420p (compatível)
-  const finalFmt = isVaapi ? 'format=nv12,hwupload' : 'format=yuv420p';
+  const finalFmt = useVaapi ? 'format=nv12,hwupload' : 'format=yuv420p';
   fc += `${vlabel}${finalFmt}[vout]`;
   args.push('-filter_complex', fc, '-map', '[vout]');
 
@@ -125,21 +127,26 @@ function ffmpegArgs(id, effect, fps) {
   } else {
     args.push('-an');
   }
-  args.push(...vencArgs(), '-movflags', '+faststart', output);
+  args.push(...vencArgs(forceSoftware), '-movflags', '+faststart', output);
   return args;
 }
 
-function processVideo(id, effect, fps) {
+function processVideo(id, effect, fps, forceSoftware = false) {
   const input = rawPath(id);
   const output = finalPath(id);
-  const args = ffmpegArgs(id, effect, fps);
-  console.log(`Processando ${id} (${effect}): ffmpeg ${args.join(' ')}`);
+  const args = ffmpegArgs(id, effect, fps, forceSoftware);
+  console.log(`Processando ${id} (${effect})${forceSoftware ? ' [CPU]' : ''}: ffmpeg ${args.join(' ')}`);
   const proc = spawn('ffmpeg', args);
   let errLog = '';
   proc.stderr.on('data', (d) => { errLog += d.toString().slice(-2000); });
   proc.on('error', (e) => finishProcessing(id, false, 'ffmpeg não encontrado: ' + e.message, input, output));
   proc.on('close', (code) => {
     const ok = code === 0 && fs.existsSync(output) && fs.statSync(output).size > 0;
+    if (!ok && !forceSoftware && ENCODER !== 'libx264') {
+      // Encoder de hardware falhou (ex.: VAAPI sem GPU no container) -> tenta CPU.
+      console.warn(`Encoder "${ENCODER}" falhou (code ${code}). Refazendo na CPU…`);
+      return processVideo(id, effect, fps, true);
+    }
     finishProcessing(id, ok, ok ? null : ('ffmpeg code ' + code + '\n' + errLog), input, output);
   });
 }
