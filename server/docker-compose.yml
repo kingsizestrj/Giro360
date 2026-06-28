@@ -1,53 +1,35 @@
 services:
   giro360:
     build: .
-    # Se preferir usar a imagem já pronta em vez de buildar, comente "build: ."
-    # e use uma imagem sua: image: seuusuario/giro360-server:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
+    # As configurações vêm do arquivo .env (que fica só no seu servidor).
+    # Copie .env.example para .env e edite lá — assim "git pull" nunca dá conflito.
     environment:
-      # Chave que o app precisa enviar no header X-Api-Key. TROQUE por algo secreto.
-      API_KEY: "troque-esta-chave"
-      # URL pública pela qual o celular do cliente acessa o servidor.
-      # Use seu domínio/HTTPS se tiver. Ex.: https://videos.seudominio.com
-      # Se for acesso por IP na rede local: http://192.168.0.10:8080
-      PUBLIC_BASE_URL: "http://SEU_IP_OU_DOMINIO:8080"
-      # --- Velocidade do processamento (opcional) ---
-      # Preset do x264: ultrafast é o mais rápido (arquivo um pouco maior).
-      VIDEO_PRESET: "veryfast"
-      VIDEO_CRF: "23"
-      # Limite de resolução (acelera e reduz tamanho). Ex.: 1080 ou 720. 0 = sem limite.
-      MAX_HEIGHT: "1080"
-      # --- Aceleração por HARDWARE (recomendado p/ ficar "tipo CapCut") ---
-      # Intel (seu i3 7ª gen tem Quick Sync) via VAAPI: descomente as 2 linhas
-      # abaixo E o bloco "devices:" mais abaixo. Renderiza em ~1s.
-      # VIDEO_ENCODER: "h264_vaapi"
-      # LIBVA_DRIVER_NAME: "iHD"
-      #   NVIDIA: VIDEO_ENCODER=h264_nvenc (precisa runtime nvidia / --gpus all)
-    # Passa a placa de vídeo Intel para o container (necessário p/ VAAPI):
+      API_KEY: "${API_KEY:-troque-esta-chave}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
+      VIDEO_ENCODER: "${VIDEO_ENCODER:-libx264}"
+      VIDEO_PRESET: "${VIDEO_PRESET:-veryfast}"
+      VIDEO_CRF: "${VIDEO_CRF:-23}"
+      MAX_HEIGHT: "${MAX_HEIGHT:-1080}"
+      LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-iHD}"
+    # Para aceleração Intel (VAAPI) descomente o bloco abaixo e defina
+    # VIDEO_ENCODER=h264_vaapi no .env:
     # devices:
     #   - /dev/dri:/dev/dri
     volumes:
       - ./data:/data
 
-  # ---------------------------------------------------------------------------
-  # OPCIONAL: HTTPS automático com Caddy (recomendado se você tem um domínio).
-  # Descomente este bloco, ajuste o domínio no Caddyfile e troque o
-  # PUBLIC_BASE_URL acima para https://seu-dominio. Depois remova o "ports"
-  # do serviço giro360 (o Caddy passa a ser a porta de entrada).
-  # ---------------------------------------------------------------------------
+  # OPCIONAL: HTTPS automático com Caddy (veja o README).
   # caddy:
   #   image: caddy:2-alpine
   #   restart: unless-stopped
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
+  #   ports: ["80:80", "443:443"]
   #   volumes:
   #     - ./Caddyfile:/etc/caddy/Caddyfile
   #     - caddy_data:/data
   #     - caddy_config:/config
-
 # volumes:
 #   caddy_data:
 #   caddy_config:
