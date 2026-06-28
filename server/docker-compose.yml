@@ -13,6 +13,16 @@ services:
       # Use seu domínio/HTTPS se tiver. Ex.: https://videos.seudominio.com
       # Se for acesso por IP na rede local: http://192.168.0.10:8080
       PUBLIC_BASE_URL: "http://SEU_IP_OU_DOMINIO:8080"
+      # --- Velocidade do processamento (opcional) ---
+      # Preset do x264: ultrafast é o mais rápido (arquivo um pouco maior).
+      VIDEO_PRESET: "veryfast"
+      VIDEO_CRF: "23"
+      # Limite de resolução (acelera e reduz tamanho). Ex.: 1080 ou 720. 0 = sem limite.
+      MAX_HEIGHT: "1080"
+      # Aceleração por GPU (se o notebook/servidor tiver e o FFmpeg suportar):
+      #   NVIDIA: VIDEO_ENCODER=h264_nvenc   (precisa --gpus all no Docker)
+      #   Intel : VIDEO_ENCODER=h264_qsv
+      # VIDEO_ENCODER: "h264_nvenc"
     volumes:
       - ./data:/data
 

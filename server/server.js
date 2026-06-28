@@ -29,6 +29,24 @@ const VIDEOS_DIR = path.join(DATA_DIR, 'videos');
 const API_KEY = process.env.API_KEY || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
+// Codec de vídeo (velocidade). Padrão: libx264 + preset rápido.
+// Para acelerar por GPU, troque VIDEO_ENCODER (ex.: h264_nvenc, h264_qsv,
+// h264_videotoolbox) — exige FFmpeg/driver compatíveis no servidor.
+const ENCODER = process.env.VIDEO_ENCODER || 'libx264';
+const PRESET = process.env.VIDEO_PRESET || 'veryfast';
+const CRF = process.env.VIDEO_CRF || '23';
+const MAX_HEIGHT = parseInt(process.env.MAX_HEIGHT || '0', 10); // 0 = sem limite
+
+function vencArgs() {
+  const a = ['-c:v', ENCODER];
+  if (ENCODER === 'libx264' || ENCODER === 'libx265') {
+    a.push('-preset', PRESET, '-crf', CRF);
+  } else if (ENCODER.includes('nvenc')) {
+    a.push('-preset', 'p4', '-cq', CRF);
+  }
+  return a;
+}
+
 fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 
 const rawPath = (id) => path.join(VIDEOS_DIR, id + '_raw.mp4');
@@ -83,7 +101,9 @@ function ffmpegArgs(id, effect, fps) {
     fc += `[${frameIdx}:v][fx]scale2ref=w=iw:h=ih[frm][base];[base][frm]overlay=0:0[ov];`;
     vlabel = '[ov]';
   }
-  fc += `${vlabel}format=yuv420p[vout]`;
+  // limita a resolução (opcional) para acelerar/reduzir tamanho
+  const scale = MAX_HEIGHT > 0 ? `scale=-2:'min(ih,${MAX_HEIGHT})',` : '';
+  fc += `${vlabel}${scale}format=yuv420p[vout]`;
   args.push('-filter_complex', fc, '-map', '[vout]');
 
   if (hasMusic) {
@@ -93,7 +113,7 @@ function ffmpegArgs(id, effect, fps) {
   } else {
     args.push('-an');
   }
-  args.push('-movflags', '+faststart', output);
+  args.push(...vencArgs(), '-movflags', '+faststart', output);
   return args;
 }
 

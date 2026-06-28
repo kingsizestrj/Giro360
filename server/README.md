@@ -48,6 +48,25 @@ Na tela inicial do Giro360, toque na **engrenagem** e preencha:
 Depois, na galeria de um vídeo, toque em **QR Code** → **Enviar e gerar QR**.
 O app envia o vídeo e mostra o QR pronto pro cliente escanear.
 
+## Velocidade (rodar num notebook na festa) ⚡
+
+Rodar o servidor num **notebook na própria festa** é o cenário mais rápido:
+o upload é instantâneo (rede local) e o notebook processa muito mais rápido
+que o celular.
+
+Para deixar ainda mais veloz, ajuste no `docker-compose.yml`:
+
+- `VIDEO_PRESET=ultrafast` — encoda o mais rápido possível (arquivo um pouco maior).
+- `MAX_HEIGHT=720` — processa/baixa mais rápido (720p é ótimo para celular).
+- **GPU (placa de vídeo):** se o notebook tiver:
+  - NVIDIA: `VIDEO_ENCODER=h264_nvenc` (precisa rodar o Docker com `--gpus all`
+    e a imagem NVIDIA do FFmpeg). Fica **5–10× mais rápido**.
+  - Intel/AMD: `VIDEO_ENCODER=h264_qsv` (Quick Sync).
+
+Dica: numa festa, crie um **Wi‑Fi local** (roteador ou o hotspot do notebook),
+conecte o celular nele e use o IP do notebook em `PUBLIC_BASE_URL`. Os convidados
+escaneiam o QR e baixam pela mesma rede — sem depender de internet.
+
 ## HTTPS (recomendado com domínio)
 
 Android bloqueia HTTP "puro" por padrão — o app já vem liberado para HTTP para
