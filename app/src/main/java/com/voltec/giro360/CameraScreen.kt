@@ -642,33 +642,50 @@ private fun displayRotation(context: Context): Int = try {
     Surface.ROTATION_0
 }
 
-@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
-private fun widestBackSelector(provider: ProcessCameraProvider): CameraSelector {
+/**
+ * Procura, DENTRO da câmera traseira lógica, a lente física (physical camera) de
+ * menor distância focal — a ultra-wide. É assim que o CameraX chega na grande
+ * angular em celulares com multi-câmera lógica.
+ *
+ * Devolve o id físico da ultra-wide (ou null se o aparelho não expõe lentes
+ * físicas separadas — caso de muitos Motorola, em que a grande angular só é
+ * acessível pelo app de câmera nativo).
+ */
+private fun widestPhysicalBackId(context: Context): String? {
     return try {
-        val backInfos = CameraSelector.DEFAULT_BACK_CAMERA.filter(provider.availableCameraInfos)
-        var target: androidx.camera.core.CameraInfo? = null
-        var bestFocal = Float.MAX_VALUE
-        for (ci in backInfos) {
-            val focals = androidx.camera.camera2.interop.Camera2CameraInfo.from(ci)
-                .getCameraCharacteristic(
+        val cm = context.getSystemService(Context.CAMERA_SERVICE)
+            as android.hardware.camera2.CameraManager
+        for (camId in cm.cameraIdList) {
+            val ch = cm.getCameraCharacteristics(camId)
+            if (ch.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) !=
+                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+            ) continue
+            val physIds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                ch.physicalCameraIds else emptySet<String>()
+            if (physIds.size < 2) continue // não é multi-câmera lógica -> sem ultra-wide
+            // distância focal da própria lógica (referência da principal)
+            val mainFocal = ch.get(
+                android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+            )?.minOrNull() ?: Float.MAX_VALUE
+            var bestId: String? = null
+            var bestFocal = mainFocal
+            for (pid in physIds) {
+                val focals = cm.getCameraCharacteristics(pid).get(
                     android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
-                )
-            val m = focals?.minOrNull() ?: continue
-            if (m < bestFocal) { bestFocal = m; target = ci }
+                ) ?: continue
+                val m = focals.minOrNull() ?: continue
+                if (m < bestFocal) { bestFocal = m; bestId = pid }
+            }
+            return bestId // só devolve se achou uma lente MAIS aberta que a principal
         }
-        val chosen = target
-        if (chosen != null) {
-            CameraSelector.Builder()
-                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                .addCameraFilter { infos -> infos.filter { it == chosen } }
-                .build()
-        } else CameraSelector.DEFAULT_BACK_CAMERA
+        null
     } catch (e: Exception) {
-        Log.w(TAG, "Falha ao selecionar grande angular", e)
-        CameraSelector.DEFAULT_BACK_CAMERA
+        Log.w(TAG, "Falha ao procurar grande angular", e)
+        null
     }
 }
 
+@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
 private fun bindCamera(
     context: Context,
     provider: ProcessCameraProvider,
@@ -678,44 +695,53 @@ private fun bindCamera(
 ): Pair<VideoCapture<Recorder>?, Camera?> {
     // Orientação correta do vídeo/preview (corrige vídeo saindo deitado).
     val targetRotation = displayRotation(context)
-
-    val preview = Preview.Builder().setTargetRotation(targetRotation).build().also {
-        it.surfaceProvider = previewView.surfaceProvider
-    }
     // Sempre a melhor qualidade que o aparelho oferecer (UHD > FHD > HD > SD).
     val qualitySelector = QualitySelector.fromOrderedList(
         listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
         FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
     )
-    // Grande angular: escolhe a câmera traseira de menor distância focal (mais aberta).
-    val cameraSelector = if (wide) widestBackSelector(provider) else CameraSelector.DEFAULT_BACK_CAMERA
+    // Grande angular: id da lente física ultra-wide (null se o aparelho não tem).
+    val physId = if (wide) widestPhysicalBackId(context) else null
 
-    fun buildVideoCapture(stab: Boolean): VideoCapture<Recorder> {
+    fun attempt(usePhys: Boolean, stab: Boolean): Pair<VideoCapture<Recorder>, Camera> {
+        val previewBuilder = Preview.Builder().setTargetRotation(targetRotation)
+        if (usePhys && physId != null) {
+            androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder)
+                .setPhysicalCameraId(physId)
+        }
+        val preview = previewBuilder.build().also { it.surfaceProvider = previewView.surfaceProvider }
+
         val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
-        val builder = VideoCapture.Builder(recorder).setTargetRotation(targetRotation)
-        if (stab) builder.setVideoStabilizationEnabled(true)
-        return builder.build()
+        val vcBuilder = VideoCapture.Builder(recorder).setTargetRotation(targetRotation)
+        if (usePhys && physId != null) {
+            androidx.camera.camera2.interop.Camera2Interop.Extender(vcBuilder)
+                .setPhysicalCameraId(physId)
+        }
+        if (stab) vcBuilder.setVideoStabilizationEnabled(true)
+        val videoCapture = vcBuilder.build()
+
+        provider.unbindAll()
+        val camera = provider.bindToLifecycle(
+            lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture
+        )
+        return videoCapture to camera
     }
 
-    // Tenta com estabilização de vídeo; se o aparelho não suportar, o bind falha
-    // e caímos no fallback sem estabilização.
-    return try {
-        provider.unbindAll()
-        val videoCapture = buildVideoCapture(true)
-        val camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, videoCapture)
-        videoCapture to camera
-    } catch (e: Exception) {
-        Log.e(TAG, "Falha ao ligar câmera; tentando sem estabilização", e)
+    // Tenta na ordem: ultra-wide+estab -> ultra-wide sem estab -> normal+estab -> normal.
+    val combos = listOf(
+        (physId != null) to true,
+        (physId != null) to false,
+        false to true,
+        false to false
+    ).distinct()
+    for ((usePhys, stab) in combos) {
         try {
-            provider.unbindAll()
-            val videoCapture = buildVideoCapture(false)
-            val camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, videoCapture)
-            videoCapture to camera
-        } catch (e2: Exception) {
-            Log.e(TAG, "Falha ao ligar câmera", e2)
-            null to null
+            return attempt(usePhys, stab)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao ligar câmera (ultra-wide=$usePhys, estab=$stab)", e)
         }
     }
+    return null to null
 }
 
 private fun startRecordingToFile(
