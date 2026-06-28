@@ -1,14 +1,23 @@
 package com.voltec.giro360
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas as ComposeCanvas
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import java.io.ByteArrayOutputStream
 
 /** Estilo de moldura desenhada por código (sem precisar de imagem). */
 data class FrameStyle(
@@ -71,6 +80,24 @@ val BUILT_IN_FRAMES: List<FrameStyle> = listOf(
 )
 
 fun frameById(id: String?): FrameStyle? = BUILT_IN_FRAMES.firstOrNull { it.id == id }
+
+/**
+ * Renderiza a moldura embutida num PNG (para o servidor sobrepor no vídeo).
+ * A densidade é proporcional à largura para a moldura ficar igual à da prévia.
+ */
+fun renderFrameToPng(style: FrameStyle, width: Int = 1080, height: Int = 1920): ByteArray {
+    val image = ImageBitmap(width, height)
+    val canvas = ComposeCanvas(image)
+    CanvasDrawScope().draw(
+        Density(width / 360f),
+        LayoutDirection.Ltr,
+        canvas,
+        Size(width.toFloat(), height.toFloat())
+    ) { style.draw(this) }
+    val out = ByteArrayOutputStream()
+    image.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, out)
+    return out.toByteArray()
+}
 
 /** Desenha a moldura embutida ocupando a tela toda. */
 @Composable

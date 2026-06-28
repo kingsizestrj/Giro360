@@ -161,6 +161,8 @@ fun CameraScreen(
         val curMusic = musicUri
         val curFps = boomFps
         val curW = boomWidth
+        val curFrameId = frameId
+        val curCustomFrame = customFrameUri
         // Roda num escopo de aplicação (GiroScope): processamento, gravação e upload
         // terminam mesmo se o usuário sair da tela — nada de vídeo perdido.
         GiroScope.io.launch {
@@ -177,9 +179,19 @@ fun CameraScreen(
                         effect = curEffect
                     )
                     EventStore.addRecording(appCtx, saved)
+                    // Moldura: embutida -> PNG; da galeria -> bytes da imagem.
+                    val frameBytes: ByteArray? = when {
+                        curFrameId != null -> frameById(curFrameId)?.let {
+                            runCatching { renderFrameToPng(it) }.getOrNull()
+                        }
+                        curCustomFrame != null -> runCatching {
+                            appCtx.contentResolver.openInputStream(curCustomFrame)?.use { it.readBytes() }
+                        }.getOrNull()
+                        else -> null
+                    }
                     ui { busyMessage = "Enviando ao servidor… 0%" }
-                    when (val result = CloudUploader.upload(
-                        appCtx, sourcePath, curEffect.name.lowercase(), curFps
+                    when (val result = CloudUploader.uploadJob(
+                        appCtx, sourcePath, curEffect.name.lowercase(), curFps, frameBytes, curMusic
                     ) { pct -> busyMessage = "Enviando ao servidor… $pct%" }) {
                         is CloudUploader.Result.Success -> {
                             EventStore.updateRecording(appCtx, saved.copy(shareUrl = result.url))

@@ -34,6 +34,8 @@ fs.mkdirSync(VIDEOS_DIR, { recursive: true });
 const rawPath = (id) => path.join(VIDEOS_DIR, id + '_raw.mp4');
 const finalPath = (id) => path.join(VIDEOS_DIR, id + '.mp4');
 const metaPath = (id) => path.join(VIDEOS_DIR, id + '.json');
+const framePath = (id) => path.join(VIDEOS_DIR, id + '_frame.png');
+const musicPath = (id) => path.join(VIDEOS_DIR, id + '_music.bin');
 
 function readMeta(id) {
   try { return JSON.parse(fs.readFileSync(metaPath(id))); } catch (e) { return null; }
@@ -53,30 +55,52 @@ function send(res, status, body, headers) {
 }
 
 // ---------- Processamento (FFmpeg) ----------
-function ffmpegArgs(effect, fps, input, output) {
+function ffmpegArgs(id, effect, fps) {
   const f = Math.max(8, Math.min(60, parseInt(fps, 10) || 20));
-  switch (effect) {
-    case 'boomerang':
-      // vídeo inteiro de ida e volta, sem áudio, taxa de quadros [f]
-      return ['-y', '-i', input,
-        '-filter_complex', `[0:v]fps=${f},reverse[r];[0:v]fps=${f}[v];[v][r]concat=n=2:v=1:a=0,format=yuv420p`,
-        '-an', '-movflags', '+faststart', output];
-    case 'slow':
-      // 2x mais lento, sem áudio
-      return ['-y', '-i', input,
-        '-filter:v', 'setpts=2.0*PTS,format=yuv420p',
-        '-an', '-movflags', '+faststart', output];
-    default:
-      // normal: re-encode leve para orientação "embutida" e faststart, mantendo áudio
-      return ['-y', '-i', input, '-vf', 'format=yuv420p',
-        '-c:a', 'aac', '-movflags', '+faststart', output];
+  const input = rawPath(id);
+  const output = finalPath(id);
+  const hasFrame = fs.existsSync(framePath(id));
+  const hasMusic = fs.existsSync(musicPath(id));
+
+  const args = ['-y', '-i', input]; // [0] = vídeo
+  let frameIdx = -1, musicIdx = -1, next = 1;
+  if (hasFrame) { args.push('-i', framePath(id)); frameIdx = next++; }
+  if (hasMusic) { args.push('-stream_loop', '-1', '-i', musicPath(id)); musicIdx = next++; }
+
+  // Cadeia de vídeo: efeito -> (moldura) -> yuv420p -> [vout]
+  let fc;
+  if (effect === 'boomerang') {
+    // divide em duas cópias: uma normal e uma invertida, e concatena (ida+volta)
+    fc = `[0:v]fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
+  } else if (effect === 'slow') {
+    fc = `[0:v]setpts=2.0*PTS[fx];`;
+  } else {
+    fc = `[0:v]null[fx];`;
   }
+  let vlabel = '[fx]';
+  if (hasFrame) {
+    // escala a moldura para o tamanho do vídeo e sobrepõe
+    fc += `[${frameIdx}:v][fx]scale2ref=w=iw:h=ih[frm][base];[base][frm]overlay=0:0[ov];`;
+    vlabel = '[ov]';
+  }
+  fc += `${vlabel}format=yuv420p[vout]`;
+  args.push('-filter_complex', fc, '-map', '[vout]');
+
+  if (hasMusic) {
+    args.push('-map', `${musicIdx}:a`, '-c:a', 'aac', '-shortest');
+  } else if (effect === 'normal') {
+    args.push('-map', '0:a?', '-c:a', 'aac'); // mantém áudio original se houver
+  } else {
+    args.push('-an');
+  }
+  args.push('-movflags', '+faststart', output);
+  return args;
 }
 
 function processVideo(id, effect, fps) {
   const input = rawPath(id);
   const output = finalPath(id);
-  const args = ffmpegArgs(effect, fps, input, output);
+  const args = ffmpegArgs(id, effect, fps);
   console.log(`Processando ${id} (${effect}): ffmpeg ${args.join(' ')}`);
   const proc = spawn('ffmpeg', args);
   let errLog = '';
@@ -100,14 +124,33 @@ function finishProcessing(id, ok, error, input, output) {
     meta.status = fs.existsSync(output) ? 'done' : 'error';
     meta.error = (error || '').slice(0, 500);
   }
+  // limpa moldura/música temporárias
+  try { fs.unlinkSync(framePath(id)); } catch (e) {}
+  try { fs.unlinkSync(musicPath(id)); } catch (e) {}
   writeMeta(id, meta);
 }
 
 // ---------- Upload ----------
+// Recebe moldura (PNG) ou música, associadas ao id do vídeo.
+function handleAsset(req, res) {
+  if (API_KEY && req.headers['x-api-key'] !== API_KEY) return send(res, 401, 'Chave inválida');
+  const u = new URL(req.url, 'http://x');
+  const id = u.searchParams.get('id') || '';
+  const kind = u.searchParams.get('kind') || '';
+  if (!isValidId(id) || (kind !== 'frame' && kind !== 'music')) return send(res, 400, 'Parâmetros inválidos');
+  const dest = kind === 'frame' ? framePath(id) : musicPath(id);
+  const out = fs.createWriteStream(dest);
+  req.pipe(out);
+  out.on('finish', () => send(res, 200, 'ok'));
+  out.on('error', () => send(res, 500, 'Falha'));
+  req.on('error', () => out.destroy());
+}
+
 function handleUpload(req, res) {
   if (API_KEY && req.headers['x-api-key'] !== API_KEY) return send(res, 401, 'Chave inválida');
-  const id = crypto.randomUUID();
   const u = new URL(req.url, 'http://x');
+  const reqId = u.searchParams.get('id') || '';
+  const id = isValidId(reqId) ? reqId : crypto.randomUUID();
   const name = (u.searchParams.get('name') || 'Prime360.mp4').replace(/[^\w.\- ]/g, '_');
   const effect = (u.searchParams.get('effect') || 'normal').toLowerCase();
   const fps = u.searchParams.get('fps') || '20';
@@ -212,6 +255,7 @@ const server = http.createServer((req, res) => {
   const id2 = (p[1] || '').replace(/\.mp4$/, '');
 
   if (req.method === 'POST' && p[0] === 'upload') return handleUpload(req, res);
+  if (req.method === 'POST' && p[0] === 'asset') return handleAsset(req, res);
   if (req.method === 'GET' && p[0] === 'healthz') return send(res, 200, 'ok');
   if (req.method === 'GET' && p[0] === 'status' && p[1]) {
     const m = readMeta(id2);
