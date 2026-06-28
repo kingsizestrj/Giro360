@@ -44,6 +44,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -70,7 +71,7 @@ fun CameraScreen(
 
     var effect by remember { mutableStateOf(ev.effect) }
     var duration by remember { mutableStateOf(ev.durationSeconds) }
-    var autoStart by remember { mutableStateOf(ev.autoStart) }
+    var countdownSeconds by remember { mutableStateOf(ev.countdownSeconds) }
     var frameId by remember { mutableStateOf(ev.frameId) }
     var customFrameUri by remember { mutableStateOf(ev.customFrameUri?.let { Uri.parse(it) }) }
     var musicUri by remember { mutableStateOf(ev.musicUri?.let { Uri.parse(it) }) }
@@ -81,7 +82,7 @@ fun CameraScreen(
         val updated = ev.copy(
             effect = effect,
             durationSeconds = duration,
-            autoStart = autoStart,
+            countdownSeconds = countdownSeconds,
             frameId = frameId,
             customFrameUri = customFrameUri?.toString(),
             musicUri = musicUri?.toString(),
@@ -97,6 +98,8 @@ fun CameraScreen(
     var isRecording by remember { mutableStateOf(false) }
     var zoom by remember { mutableStateOf(0f) }
     var showSettings by remember { mutableStateOf(false) }
+    var countdown by remember { mutableStateOf(0) }
+    var countdownJob by remember { mutableStateOf<Job?>(null) }
     val previewView = remember { PreviewView(context) }
 
     val isSlow = effect == Effect.SLOW
@@ -168,24 +171,17 @@ fun CameraScreen(
     }
 
     fun toggleRecording() {
-        if (isRecording) {
-            recording?.stop(); recording = null
-        } else beginRecording()
-    }
-
-    // Detector de giro para iniciar automaticamente
-    DisposableEffect(autoStart) {
-        val detector = if (autoStart) SpinDetector(context) {
-            // chamado na thread de sensores; volta pra UI
-            scope.launch { if (!isRecording) beginRecording() }
-        } else null
-        detector?.start()
-        onDispose { detector?.stop() }
-    }
-    // Re-arma o detector quando termina de gravar
-    LaunchedEffect(isRecording) {
-        if (!isRecording && autoStart) {
-            delay(1500) // cooldown pra não disparar no fim do giro
+        when {
+            isRecording -> { recording?.stop(); recording = null }
+            countdown > 0 -> { countdownJob?.cancel(); countdown = 0 } // cancela a contagem
+            countdownSeconds <= 0 -> beginRecording()
+            else -> {
+                countdownJob = scope.launch {
+                    for (i in countdownSeconds downTo 1) { countdown = i; delay(1000) }
+                    countdown = 0
+                    beginRecording()
+                }
+            }
         }
     }
 
@@ -199,6 +195,19 @@ fun CameraScreen(
                 contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize()
             )
         } ?: BuiltInFrameOverlay(frameId, Modifier.fillMaxSize())
+
+        // Contagem regressiva
+        if (countdown > 0) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0x66000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "$countdown", color = Color.White,
+                    fontSize = 140.sp, fontWeight = FontWeight.Bold
+                )
+            }
+        }
 
         // ----- Barra superior -----
         Row(
@@ -225,7 +234,7 @@ fun CameraScreen(
             SettingsPanel(
                 effect = effect, onEffect = { effect = it; persist() },
                 duration = duration, onDuration = { duration = it; persist() },
-                autoStart = autoStart, onAutoStart = { autoStart = it; persist() },
+                countdown = countdownSeconds, onCountdown = { countdownSeconds = it; persist() },
                 frameId = frameId,
                 onFrame = { customFrameUri = null; frameId = it; persist() },
                 onPickFrame = { frameLauncher.launch("image/*") },
@@ -257,7 +266,8 @@ fun CameraScreen(
             Spacer(Modifier.height(8.dp))
             // Efeito atual + auto
             Text(
-                "${effect.label} • ${duration}s" + if (autoStart) " • Auto" else "",
+                "${effect.label} • ${duration}s" +
+                    if (countdownSeconds > 0) " • ${countdownSeconds}s p/ iniciar" else "",
                 color = Color.White, fontSize = 13.sp
             )
             Spacer(Modifier.height(12.dp))
@@ -271,7 +281,7 @@ fun CameraScreen(
 private fun SettingsPanel(
     effect: Effect, onEffect: (Effect) -> Unit,
     duration: Int, onDuration: (Int) -> Unit,
-    autoStart: Boolean, onAutoStart: (Boolean) -> Unit,
+    countdown: Int, onCountdown: (Int) -> Unit,
     frameId: String?, onFrame: (String) -> Unit, onPickFrame: () -> Unit, onNoFrame: () -> Unit,
     musicName: String?, onPickMusic: () -> Unit, onClearMusic: () -> Unit,
     modifier: Modifier = Modifier
@@ -302,11 +312,11 @@ private fun SettingsPanel(
                 valueRange = 3f..20f, steps = 16
             )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = autoStart, onCheckedChange = onAutoStart)
-                Spacer(Modifier.width(8.dp))
-                Text("Gravar automático ao girar", color = Color.White)
-            }
+            Text("Contagem antes de gravar: ${countdown}s", color = Color.White, fontWeight = FontWeight.Bold)
+            Slider(
+                value = countdown.toFloat(), onValueChange = { onCountdown(it.toInt()) },
+                valueRange = 0f..10f, steps = 9
+            )
             Spacer(Modifier.height(12.dp))
 
             Text("Moldura", color = Color.White, fontWeight = FontWeight.Bold)

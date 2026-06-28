@@ -129,7 +129,7 @@ object EventStore {
         put("createdAt", e.createdAt)
         put("effect", e.effect.name)
         put("durationSeconds", e.durationSeconds)
-        put("autoStart", e.autoStart)
+        put("countdownSeconds", e.countdownSeconds)
         put("frameId", e.frameId ?: JSONObject.NULL)
         put("customFrameUri", e.customFrameUri ?: JSONObject.NULL)
         put("musicUri", e.musicUri ?: JSONObject.NULL)
@@ -142,7 +142,7 @@ object EventStore {
         createdAt = o.optLong("createdAt"),
         effect = runCatching { Effect.valueOf(o.optString("effect", "SLOW")) }.getOrDefault(Effect.SLOW),
         durationSeconds = o.optInt("durationSeconds", 8),
-        autoStart = o.optBoolean("autoStart", true),
+        countdownSeconds = o.optInt("countdownSeconds", 5),
         frameId = o.optStringOrNull("frameId"),
         customFrameUri = o.optStringOrNull("customFrameUri"),
         musicUri = o.optStringOrNull("musicUri"),
