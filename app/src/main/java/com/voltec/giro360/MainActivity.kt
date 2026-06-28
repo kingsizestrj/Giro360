@@ -27,8 +27,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+            MaterialTheme(colorScheme = Prime360Colors) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Prime.Bg) {
                     Giro360App()
                 }
             }

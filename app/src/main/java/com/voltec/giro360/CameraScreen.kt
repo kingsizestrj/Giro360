@@ -301,9 +301,60 @@ fun CameraScreen(
             }
         }
 
-        // ----- Painel de configurações -----
-        if (showSettings) {
-            SettingsPanel(
+        // ----- Controles inferiores -----
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Zoom
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 40.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Filled.ZoomOut, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                Slider(
+                    value = zoom, onValueChange = { zoom = it },
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                )
+                Icon(Icons.Filled.ZoomIn, null, tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            // Chips de efeito (sempre visíveis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Effect.values().forEach { e ->
+                    EffectChip(label = e.label, selected = effect == e, enabled = !isRecording) {
+                        effect = e; persist()
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${duration}s" + if (countdownSeconds > 0) " • ${countdownSeconds}s p/ iniciar" else "",
+                color = Prime.TextDim, fontSize = 12.sp
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(contentAlignment = Alignment.Center) {
+                if (isRecording) {
+                    CircularProgressIndicator(
+                        progress = { recordProgress },
+                        modifier = Modifier.size(98.dp),
+                        color = Prime.Record,
+                        trackColor = Color(0x55FFFFFF),
+                        strokeWidth = 5.dp
+                    )
+                }
+                RecordButton(isRecording = isRecording, onClick = ::toggleRecording)
+            }
+        }
+    }
+
+    // ----- Ajustes (bottom sheet) -----
+    if (showSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false },
+            containerColor = Prime.Surface
+        ) {
+            SettingsSheet(
                 effect = effect, onEffect = { effect = it; persist() },
                 duration = duration, onDuration = { duration = it; persist() },
                 countdown = countdownSeconds, onCountdown = { countdownSeconds = it; persist() },
@@ -315,48 +366,8 @@ fun CameraScreen(
                 onNoFrame = { frameId = null; customFrameUri = null; persist() },
                 musicName = musicName,
                 onPickMusic = { musicLauncher.launch("audio/*") },
-                onClearMusic = { musicUri = null; musicName = null; persist() },
-                modifier = Modifier.align(Alignment.Center)
+                onClearMusic = { musicUri = null; musicName = null; persist() }
             )
-        }
-
-        // ----- Controles inferiores -----
-        Column(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Zoom
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Filled.ZoomOut, null, tint = Color.White)
-                Slider(
-                    value = zoom, onValueChange = { zoom = it },
-                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                )
-                Icon(Icons.Filled.ZoomIn, null, tint = Color.White)
-            }
-            Spacer(Modifier.height(8.dp))
-            // Efeito atual + auto
-            Text(
-                "${effect.label} • ${duration}s" +
-                    if (countdownSeconds > 0) " • ${countdownSeconds}s p/ iniciar" else "",
-                color = Color.White, fontSize = 13.sp
-            )
-            Spacer(Modifier.height(12.dp))
-            Box(contentAlignment = Alignment.Center) {
-                if (isRecording) {
-                    CircularProgressIndicator(
-                        progress = { recordProgress },
-                        modifier = Modifier.size(98.dp),
-                        color = Color.Red,
-                        trackColor = Color(0x55FFFFFF),
-                        strokeWidth = 5.dp
-                    )
-                }
-                RecordButton(isRecording = isRecording, onClick = ::toggleRecording)
-            }
         }
     }
 
@@ -394,22 +405,22 @@ fun CameraScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsPanel(
+private fun SettingsSheet(
     effect: Effect, onEffect: (Effect) -> Unit,
     duration: Int, onDuration: (Int) -> Unit,
     countdown: Int, onCountdown: (Int) -> Unit,
     boomFps: Int, onBoomFps: (Int) -> Unit,
     boomWidth: Int, onBoomWidth: (Int) -> Unit,
     frameId: String?, onFrame: (String) -> Unit, onPickFrame: () -> Unit, onNoFrame: () -> Unit,
-    musicName: String?, onPickMusic: () -> Unit, onClearMusic: () -> Unit,
-    modifier: Modifier = Modifier
+    musicName: String?, onPickMusic: () -> Unit, onClearMusic: () -> Unit
 ) {
-    Surface(
-        modifier = modifier.fillMaxWidth().padding(16.dp),
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xF21A1A1A)
+    Column(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 20.dp).padding(bottom = 28.dp)
+            .verticalScroll(rememberScrollState())
     ) {
-        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+            Text("Ajustes", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Spacer(Modifier.height(14.dp))
             Text("Efeito", color = Color.White, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Effect.values().forEach { e ->
@@ -489,6 +500,23 @@ private fun SettingsPanel(
                 }
             }
         }
+}
+
+@Composable
+private fun EffectChip(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(50),
+        color = if (selected) Prime.Violet else Color(0x33FFFFFF)
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+        )
     }
 }
 

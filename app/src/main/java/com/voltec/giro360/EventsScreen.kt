@@ -1,5 +1,6 @@
 package com.voltec.giro360
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -35,23 +37,32 @@ fun EventsScreen(
     fun refresh() { events = EventStore.loadEvents(context) }
 
     Scaffold(
-        containerColor = Color.Black,
+        containerColor = Prime.Bg,
         topBar = {
             TopAppBar(
-                title = { Text("Giro360", fontWeight = FontWeight.Bold) },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.CameraAlt, null, tint = Prime.Violet, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Prime", fontWeight = FontWeight.Bold)
+                        Text("360", fontWeight = FontWeight.Bold, color = Prime.Pink)
+                    }
+                },
                 actions = {
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Filled.Settings, "Configurações", tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF101010), titleContentColor = Color.White
+                    containerColor = Prime.Bg, titleContentColor = Color.White
                 )
             )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { newName = ""; showCreate = true },
+                containerColor = Prime.Violet,
+                contentColor = Color.White,
                 icon = { Icon(Icons.Filled.Add, null) },
                 text = { Text("Novo evento") }
             )
@@ -64,11 +75,13 @@ fun EventsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.Filled.Celebration, null, tint = Color.Gray, modifier = Modifier.size(64.dp))
+                    Icon(Icons.Filled.Celebration, null, tint = Prime.Violet, modifier = Modifier.size(72.dp))
                     Spacer(Modifier.height(16.dp))
+                    Text("Nenhum evento ainda", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "Crie seu primeiro evento para começar a gravar vídeos 360.",
-                        color = Color.Gray
+                        "Toque em + para criar um evento e começar a gravar seus vídeos 360.",
+                        color = Prime.TextDim, textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             } else {
@@ -176,26 +189,36 @@ private fun EventCard(
     var confirmDelete by remember { mutableStateOf(false) }
     val df = remember { SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")) }
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xFF1C1C1E),
+        shape = RoundedCornerShape(20.dp),
+        color = Prime.Surface,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Prime.SurfaceHi),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Movie, null, tint = Prime.Violet, modifier = Modifier.size(24.dp))
+                }
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(event.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     Text(
                         "${df.format(Date(event.createdAt))} • $count vídeo(s)",
-                        color = Color.Gray, fontSize = 13.sp
+                        color = Prime.TextDim, fontSize = 13.sp
                     )
                 }
                 IconButton(onClick = { confirmDelete = true }) {
-                    Icon(Icons.Filled.Delete, "Excluir", tint = Color(0xFFEF5350))
+                    Icon(Icons.Filled.Delete, "Excluir", tint = Prime.TextDim)
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onRecord, modifier = Modifier.weight(1f)) {
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onRecord, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Prime.Violet, contentColor = Color.White)
+                ) {
                     Icon(Icons.Filled.Videocam, null); Spacer(Modifier.width(6.dp)); Text("Gravar")
                 }
                 OutlinedButton(onClick = onGallery, modifier = Modifier.weight(1f)) {
