@@ -16,6 +16,21 @@ android {
         versionName = "1.0"
     }
 
+    // Assinatura de release: lê a chave de variáveis de ambiente (definidas pelo
+    // CI a partir dos GitHub Secrets). Em builds locais sem essas variáveis, o
+    // release sai sem assinatura — o build não quebra.
+    val ksFile = System.getenv("KEYSTORE_FILE")
+    signingConfigs {
+        if (!ksFile.isNullOrEmpty()) {
+            create("release") {
+                storeFile = file(ksFile)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -23,6 +38,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (!ksFile.isNullOrEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

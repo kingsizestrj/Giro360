@@ -487,7 +487,10 @@ private fun SettingsSheet(
             Text("Ajustes", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Spacer(Modifier.height(14.dp))
             Text("Efeito", color = Color.White, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Effect.values().forEach { e ->
                     FilterChip(
                         selected = effect == e, onClick = { onEffect(e) },

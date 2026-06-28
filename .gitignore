@@ -8,3 +8,8 @@
 /captures
 .externalNativeBuild
 .cxx
+
+# Chaves de assinatura — NUNCA versionar
+*.jks
+*.keystore
+*.jks.b64
