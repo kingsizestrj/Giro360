@@ -292,7 +292,7 @@ private fun SettingsPanel(
                 }
             }
             if (effect == Effect.BOOMERANG) {
-                Text("Boomerang: em breve (grava normal por enquanto)", color = Color(0xFFFFC107), fontSize = 11.sp)
+                Text("Boomerang: vídeo vai-e-volta (sem áudio)", color = Color(0xFFFFC107), fontSize = 11.sp)
             }
             Spacer(Modifier.height(12.dp))
 
