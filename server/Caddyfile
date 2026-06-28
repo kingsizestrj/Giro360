@@ -1,0 +1,7 @@
+# Exemplo de HTTPS automático com Caddy.
+# Troque "videos.seudominio.com" pelo seu domínio (que deve apontar para o IP do servidor).
+# O Caddy obtém e renova o certificado SSL sozinho.
+
+videos.seudominio.com {
+    reverse_proxy giro360:8080
+}

@@ -29,6 +29,7 @@ fun EventsScreen(
     val context = LocalContext.current
     var events by remember { mutableStateOf(EventStore.loadEvents(context)) }
     var showCreate by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
     fun refresh() { events = EventStore.loadEvents(context) }
@@ -38,6 +39,11 @@ fun EventsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Giro360", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Filled.Settings, "Configurações", tint = Color.White)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF101010), titleContentColor = Color.White
                 )
@@ -113,6 +119,50 @@ fun EventsScreen(
             dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancelar") } }
         )
     }
+
+    if (showSettings) {
+        ServerSettingsDialog(onDismiss = { showSettings = false })
+    }
+}
+
+@Composable
+private fun ServerSettingsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var url by remember { mutableStateOf(AppConfig.getServerUrl(context)) }
+    var apiKey by remember { mutableStateOf(AppConfig.getApiKey(context)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Servidor de vídeos") },
+        text = {
+            Column {
+                Text(
+                    "Informe o endereço do seu servidor Giro360 (Docker). Usado para gerar " +
+                        "o QR Code de download dos vídeos.",
+                    fontSize = 13.sp, color = Color.Gray
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = url, onValueChange = { url = it },
+                    label = { Text("URL do servidor") },
+                    placeholder = { Text("http://192.168.0.10:8080") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = apiKey, onValueChange = { apiKey = it },
+                    label = { Text("Chave (API key)") }, singleLine = true
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                AppConfig.save(context, url, apiKey)
+                onDismiss()
+            }) { Text("Salvar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }
 
 @Composable

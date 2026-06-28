@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,7 +101,7 @@ fun GalleryScreen(eventId: String, onBack: () -> Unit) {
 
     // QR Code
     qrFor?.let { rec ->
-        QrDialog(rec) { qrFor = null }
+        QrDialog(rec, onUpdated = { refresh() }, onDismiss = { qrFor = null })
     }
 }
 
@@ -117,26 +118,66 @@ private fun ActionRow(icon: androidx.compose.ui.graphics.vector.ImageVector, lab
 }
 
 @Composable
-private fun QrDialog(rec: Recording, onDismiss: () -> Unit) {
-    val qrBitmap = remember(rec.id) {
-        if (rec.shareUrl != null) ShareUtil.generateQr(rec.shareUrl) else null
+private fun QrDialog(rec: Recording, onUpdated: () -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var shareUrl by remember { mutableStateOf(rec.shareUrl) }
+    var uploading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val configured = remember { AppConfig.isConfigured(context) }
+
+    val qrBitmap = remember(shareUrl) {
+        shareUrl?.let { ShareUtil.generateQr(it) }
     }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Fechar") } },
         title = { Text("QR Code") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (qrBitmap != null) {
-                    Image(qrBitmap.asImageBitmap(), "QR", Modifier.size(220.dp))
-                    Spacer(Modifier.height(8.dp))
-                    Text("Aponte a câmera para baixar o vídeo.", fontSize = 13.sp)
-                } else {
-                    Text(
-                        "O QR Code com link funciona depois que ativarmos o envio para a nuvem " +
-                            "(próxima etapa). Por enquanto use o botão Compartilhar.",
-                        fontSize = 13.sp
-                    )
+                when {
+                    qrBitmap != null -> {
+                        Image(qrBitmap.asImageBitmap(), "QR", Modifier.size(220.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text("O cliente aponta a câmera para baixar o vídeo.", fontSize = 13.sp)
+                    }
+                    !configured -> {
+                        Text(
+                            "Configure o servidor de vídeos primeiro: volte à tela inicial e " +
+                                "toque na engrenagem para informar a URL e a chave do seu servidor.",
+                            fontSize = 13.sp
+                        )
+                    }
+                    uploading -> {
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(12.dp))
+                        Text("Enviando vídeo para o servidor…", fontSize = 13.sp)
+                    }
+                    else -> {
+                        error?.let {
+                            Text("Erro: $it", color = Color(0xFFEF5350), fontSize = 13.sp)
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        Button(onClick = {
+                            uploading = true; error = null
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    CloudUploader.upload(context, rec.filePath)
+                                }
+                                uploading = false
+                                when (result) {
+                                    is CloudUploader.Result.Success -> {
+                                        val updated = rec.copy(shareUrl = result.url)
+                                        EventStore.updateRecording(context, updated)
+                                        shareUrl = result.url
+                                        onUpdated()
+                                    }
+                                    is CloudUploader.Result.Error -> error = result.message
+                                }
+                            }
+                        }) { Text("Enviar e gerar QR") }
+                    }
                 }
             }
         }
