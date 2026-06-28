@@ -76,6 +76,8 @@ fun CameraScreen(
     val ev = event ?: return
 
     var effect by remember { mutableStateOf(ev.effect) }
+    var speed by remember { mutableStateOf(ev.speed) }
+    var wideAngle by remember { mutableStateOf(ev.wideAngle) }
     var duration by remember { mutableStateOf(ev.durationSeconds) }
     var countdownSeconds by remember { mutableStateOf(ev.countdownSeconds) }
     var frameId by remember { mutableStateOf(ev.frameId) }
@@ -89,6 +91,8 @@ fun CameraScreen(
     fun persist() {
         val updated = ev.copy(
             effect = effect,
+            speed = speed,
+            wideAngle = wideAngle,
             durationSeconds = duration,
             countdownSeconds = countdownSeconds,
             boomerangFps = boomFps,
@@ -115,8 +119,6 @@ fun CameraScreen(
     var qrUrl by remember { mutableStateOf<String?>(null) }
     val previewView = remember { PreviewView(context) }
 
-    val isSlow = effect == Effect.SLOW
-
     // Pickers
     val frameLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -131,13 +133,13 @@ fun CameraScreen(
         }
     }
 
-    // Liga a câmera (recria quando a qualidade muda por causa do slow motion)
-    LaunchedEffect(isSlow) {
+    // Liga a câmera (recria quando alterna a grande angular)
+    LaunchedEffect(wideAngle) {
         // getInstance().get() é bloqueante -> fora da main; bind volta para a main.
         val provider = withContext(Dispatchers.IO) {
             ProcessCameraProvider.getInstance(context).get()
         }
-        val result = bindCamera(context, provider, lifecycleOwner, previewView, isSlow)
+        val result = bindCamera(context, provider, lifecycleOwner, previewView, wideAngle)
         videoCapture = result.first
         camera = result.second
         camera?.cameraControl?.setLinearZoom(zoom)
@@ -158,6 +160,7 @@ fun CameraScreen(
     fun finalizeRecording(sourcePath: String) {
         val appCtx = context.applicationContext
         val curEffect = effect
+        val curSpeed = speed
         val curMusic = musicUri
         val curFps = boomFps
         val curW = boomWidth
@@ -191,8 +194,8 @@ fun CameraScreen(
                     }
                     ui { busyMessage = "Enviando ao servidor… 0%" }
                     when (val result = CloudUploader.uploadJob(
-                        appCtx, sourcePath, curEffect.name.lowercase(), curFps,
-                        frameBytes, curMusic, eventId
+                        appCtx, sourcePath, curEffect.name.lowercase(), curSpeed.name.lowercase(),
+                        curFps, frameBytes, curMusic, eventId
                     ) { pct -> busyMessage = "Enviando ao servidor… $pct%" }) {
                         is CloudUploader.Result.Success -> {
                             EventStore.updateRecording(appCtx, saved.copy(shareUrl = result.url))
@@ -204,7 +207,8 @@ fun CameraScreen(
                                 appCtx,
                                 UploadQueue.Job(
                                     recId = saved.id, eventId = eventId, videoPath = sourcePath,
-                                    effect = curEffect.name.lowercase(), fps = curFps,
+                                    effect = curEffect.name.lowercase(),
+                                    speed = curSpeed.name.lowercase(), fps = curFps,
                                     frameId = curFrameId,
                                     customFrameUri = curCustomFrame?.toString(),
                                     musicUri = curMusic?.toString()
@@ -223,7 +227,7 @@ fun CameraScreen(
                     // MODO LOCAL (sem servidor): processa o efeito no aparelho.
                     ui { busyMessage = "Processando vídeo…" }
                     val finalPath = VideoProcessor.process(
-                        appCtx, sourcePath, curEffect, curMusic, curFps, curW
+                        appCtx, sourcePath, curEffect, curSpeed, curMusic, curFps, curW
                     ) { s -> busyMessage = s }
                     EventStore.addRecording(
                         appCtx,
@@ -371,6 +375,20 @@ fun CameraScreen(
                 }
             }
             Spacer(Modifier.height(8.dp))
+            // Chips de velocidade (combinam com o efeito acima)
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Speed.values().forEach { s ->
+                    EffectChip(label = s.label, selected = speed == s, enabled = !isRecording) {
+                        speed = s; persist()
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Text(
                 "${duration}s" + if (countdownSeconds > 0) " • ${countdownSeconds}s p/ iniciar" else "",
                 color = Prime.TextDim, fontSize = 12.sp
@@ -399,6 +417,8 @@ fun CameraScreen(
         ) {
             SettingsSheet(
                 effect = effect, onEffect = { effect = it; persist() },
+                speed = speed, onSpeed = { speed = it; persist() },
+                wideAngle = wideAngle, onWideAngle = { wideAngle = it; persist() },
                 duration = duration, onDuration = { duration = it; persist() },
                 countdown = countdownSeconds, onCountdown = { countdownSeconds = it; persist() },
                 boomFps = boomFps, onBoomFps = { boomFps = it; persist() },
@@ -450,6 +470,8 @@ fun CameraScreen(
 @Composable
 private fun SettingsSheet(
     effect: Effect, onEffect: (Effect) -> Unit,
+    speed: Speed, onSpeed: (Speed) -> Unit,
+    wideAngle: Boolean, onWideAngle: (Boolean) -> Unit,
     duration: Int, onDuration: (Int) -> Unit,
     countdown: Int, onCountdown: (Int) -> Unit,
     boomFps: Int, onBoomFps: (Int) -> Unit,
@@ -494,6 +516,33 @@ private fun SettingsSheet(
                             )
                         }
                 }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Text("Velocidade", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(
+                "Combina com o efeito (ex.: boomerang lento, reverso rápido).",
+                color = Prime.TextDim, fontSize = 11.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Speed.values().forEach { s ->
+                    FilterChip(
+                        selected = speed == s, onClick = { onSpeed(s) },
+                        label = { Text(s.label) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Grande angular", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Usa a lente mais aberta para pegar mais do ambiente.",
+                        color = Prime.TextDim, fontSize = 11.sp
+                    )
+                }
+                Switch(checked = wideAngle, onCheckedChange = onWideAngle)
             }
             Spacer(Modifier.height(12.dp))
 
@@ -593,12 +642,39 @@ private fun displayRotation(context: Context): Int = try {
     Surface.ROTATION_0
 }
 
+@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+private fun widestBackSelector(provider: ProcessCameraProvider): CameraSelector {
+    return try {
+        val backInfos = CameraSelector.DEFAULT_BACK_CAMERA.filter(provider.availableCameraInfos)
+        var target: androidx.camera.core.CameraInfo? = null
+        var bestFocal = Float.MAX_VALUE
+        for (ci in backInfos) {
+            val focals = androidx.camera.camera2.interop.Camera2CameraInfo.from(ci)
+                .getCameraCharacteristic(
+                    android.hardware.camera2.CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+                )
+            val m = focals?.minOrNull() ?: continue
+            if (m < bestFocal) { bestFocal = m; target = ci }
+        }
+        val chosen = target
+        if (chosen != null) {
+            CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .addCameraFilter { infos -> infos.filter { it == chosen } }
+                .build()
+        } else CameraSelector.DEFAULT_BACK_CAMERA
+    } catch (e: Exception) {
+        Log.w(TAG, "Falha ao selecionar grande angular", e)
+        CameraSelector.DEFAULT_BACK_CAMERA
+    }
+}
+
 private fun bindCamera(
     context: Context,
     provider: ProcessCameraProvider,
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
     previewView: PreviewView,
-    slowMotion: Boolean
+    wide: Boolean
 ): Pair<VideoCapture<Recorder>?, Camera?> {
     // Orientação correta do vídeo/preview (corrige vídeo saindo deitado).
     val targetRotation = displayRotation(context)
@@ -611,7 +687,8 @@ private fun bindCamera(
         listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
         FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
     )
-    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+    // Grande angular: escolhe a câmera traseira de menor distância focal (mais aberta).
+    val cameraSelector = if (wide) widestBackSelector(provider) else CameraSelector.DEFAULT_BACK_CAMERA
 
     fun buildVideoCapture(stab: Boolean): VideoCapture<Recorder> {
         val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()

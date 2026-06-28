@@ -137,6 +137,8 @@ object EventStore {
         put("name", e.name)
         put("createdAt", e.createdAt)
         put("effect", e.effect.name)
+        put("speed", e.speed.name)
+        put("wideAngle", e.wideAngle)
         put("durationSeconds", e.durationSeconds)
         put("countdownSeconds", e.countdownSeconds)
         put("boomerangFps", e.boomerangFps)
@@ -152,7 +154,9 @@ object EventStore {
         id = o.getString("id"),
         name = o.getString("name"),
         createdAt = o.optLong("createdAt"),
-        effect = runCatching { Effect.valueOf(o.optString("effect", "SLOW")) }.getOrDefault(Effect.SLOW),
+        effect = runCatching { Effect.valueOf(o.optString("effect", "NORMAL")) }.getOrDefault(Effect.NORMAL),
+        speed = runCatching { Speed.valueOf(o.optString("speed", "NORMAL")) }.getOrDefault(Speed.NORMAL),
+        wideAngle = o.optBoolean("wideAngle", false),
         durationSeconds = o.optInt("durationSeconds", 8),
         countdownSeconds = o.optInt("countdownSeconds", 5),
         boomerangFps = o.optInt("boomerangFps", 20),

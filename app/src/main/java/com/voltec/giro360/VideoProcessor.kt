@@ -35,12 +35,14 @@ object VideoProcessor {
         context: Context,
         inputPath: String,
         effect: Effect,
+        speed: Speed,
         musicUri: Uri?,
         boomerangFps: Int = 20,
         boomerangWidth: Int = 480,
         onStatus: (String) -> Unit = {}
     ): String {
         var current = inputPath
+        // 1) Movimento
         when (effect) {
             Effect.BOOMERANG -> {
                 current = runCatching {
@@ -50,14 +52,6 @@ object VideoProcessor {
                     current
                 }
             }
-            Effect.SLOW -> {
-                onStatus("Aplicando câmera lenta…")
-                current = runCatching { makeSlowMotion(current, 2.0f) }
-                    .getOrElse {
-                        Log.w(TAG, "Falha na câmera lenta, mantendo vídeo normal", it)
-                        current
-                    }
-            }
             Effect.REVERSE -> {
                 current = runCatching { makeReverse(current, boomerangFps, boomerangWidth, onStatus) }
                     .getOrElse {
@@ -66,6 +60,18 @@ object VideoProcessor {
                     }
             }
             Effect.NORMAL -> {}
+        }
+        // 2) Velocidade (combina com o efeito)
+        when (speed) {
+            Speed.SLOW -> {
+                onStatus("Aplicando câmera lenta…")
+                current = runCatching { makeSlowMotion(current, 2.0f) }.getOrElse { current }
+            }
+            Speed.FAST -> {
+                onStatus("Acelerando…")
+                current = runCatching { makeSlowMotion(current, 0.5f) }.getOrElse { current }
+            }
+            Speed.NORMAL -> {}
         }
         if (musicUri != null) {
             onStatus("Juntando música…")

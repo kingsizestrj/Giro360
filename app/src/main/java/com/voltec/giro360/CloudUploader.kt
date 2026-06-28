@@ -29,7 +29,7 @@ object CloudUploader {
         fps: Int = 20,
         eventId: String = "",
         onProgress: (Int) -> Unit = {}
-    ): Result = uploadJob(context, filePath, effect, fps, null, null, eventId, onProgress)
+    ): Result = uploadJob(context, filePath, effect, "normal", fps, null, null, eventId, onProgress)
 
     /** Consulta o status de processamento no servidor a partir da URL /v/<id>. */
     fun fetchStatus(shareUrl: String): String? {
@@ -59,6 +59,7 @@ object CloudUploader {
         context: Context,
         videoPath: String,
         effect: String,
+        speed: String,
         fps: Int,
         frameBytes: ByteArray?,
         musicUri: Uri?,
@@ -89,7 +90,7 @@ object CloudUploader {
         // 3) vídeo (com progresso) -> dispara o processamento
         val name = Uri.encode(file.name)
         val endpoint = "$baseUrl/upload?id=$id&name=$name&effect=${Uri.encode(effect)}" +
-            "&fps=$fps&event=${Uri.encode(eventId)}"
+            "&speed=${Uri.encode(speed)}&fps=$fps&event=${Uri.encode(eventId)}"
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {

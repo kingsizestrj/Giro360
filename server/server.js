@@ -7,7 +7,7 @@
  * (QR) na HORA e processa o efeito em segundo plano (FFmpeg). Quando o cliente
  * escaneia o QR, vê "processando" e, ao terminar, o vídeo pronto para baixar.
  *
- * - POST /upload?effect=boomerang|slow|normal&fps=20&name=...  -> { id, url } (imediato)
+ * - POST /upload?effect=boomerang|reverse|normal&speed=normal|slow|fast&fps=20&name=...  -> { id, url } (imediato)
  * - GET  /v/:id      -> página: "processando" (auto-refresh) ou vídeo + download
  * - GET  /status/:id -> { status: processing|done|error }
  * - GET  /raw/:id    -> stream do vídeo final (com Range)
@@ -79,7 +79,9 @@ function send(res, status, body, headers) {
 }
 
 // ---------- Processamento (FFmpeg) ----------
-function ffmpegArgs(id, effect, fps, forceSoftware) {
+// effect: normal|boomerang|reverse  (movimento)
+// speed:  normal|slow|fast          (combina com o efeito)
+function ffmpegArgs(id, effect, speed, fps, forceSoftware) {
   const useVaapi = isVaapi && !forceSoftware;
   const f = Math.max(8, Math.min(60, parseInt(fps, 10) || 20));
   const input = rawPath(id);
@@ -97,22 +99,26 @@ function ffmpegArgs(id, effect, fps, forceSoftware) {
   // Limita a resolução CEDO (acelera e reduz a memória do reverse do boomerang).
   const scale = MAX_HEIGHT > 0 ? `scale=-2:'min(ih,${MAX_HEIGHT})',` : '';
 
-  // Cadeia de vídeo: (escala) -> efeito -> (moldura) -> formato -> [vout]
+  // Cadeia de vídeo: (escala) -> efeito -> (velocidade) -> (moldura) -> formato -> [vout]
   let fc;
   if (effect === 'boomerang') {
     // divide em duas cópias: uma normal e uma invertida, e concatena (ida+volta)
     fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
-  } else if (effect === 'slow') {
-    fc = `[0:v]${scale}setpts=2.0*PTS[fx];`;
   } else if (effect === 'reverse') {
     fc = `[0:v]${scale}reverse[fx];`;
   } else {
     fc = `[0:v]${scale}null[fx];`;
   }
   let vlabel = '[fx]';
+  // Velocidade: setpts multiplica os tempos (lento = mais devagar, rápido = mais ágil).
+  const speedMult = speed === 'slow' ? '2.0' : (speed === 'fast' ? '0.5' : null);
+  if (speedMult) {
+    fc += `${vlabel}setpts=${speedMult}*PTS[sp];`;
+    vlabel = '[sp]';
+  }
   if (hasFrame) {
     // escala a moldura para o tamanho do vídeo e sobrepõe
-    fc += `[${frameIdx}:v][fx]scale2ref=w=iw:h=ih[frm][base];[base][frm]overlay=0:0[ov];`;
+    fc += `[${frameIdx}:v]${vlabel}scale2ref=w=iw:h=ih[frm][base];[base][frm]overlay=0:0[ov];`;
     vlabel = '[ov]';
   }
   // formato final: VAAPI sobe pra GPU (hwupload); senão yuv420p (compatível)
@@ -120,9 +126,12 @@ function ffmpegArgs(id, effect, fps, forceSoftware) {
   fc += `${vlabel}${finalFmt}[vout]`;
   args.push('-filter_complex', fc, '-map', '[vout]');
 
+  // Mantém o áudio original apenas no modo "normal + normal" (sem efeito e sem
+  // alterar a velocidade) ou usa a música; nos demais casos o vídeo fica mudo.
+  const keepOriginal = effect === 'normal' && speed === 'normal';
   if (hasMusic) {
     args.push('-map', `${musicIdx}:a`, '-c:a', 'aac', '-shortest');
-  } else if (effect === 'normal') {
+  } else if (keepOriginal) {
     args.push('-map', '0:a?', '-c:a', 'aac'); // mantém áudio original se houver
   } else {
     args.push('-an');
@@ -131,11 +140,11 @@ function ffmpegArgs(id, effect, fps, forceSoftware) {
   return args;
 }
 
-function processVideo(id, effect, fps, forceSoftware = false) {
+function processVideo(id, effect, speed, fps, forceSoftware = false) {
   const input = rawPath(id);
   const output = finalPath(id);
-  const args = ffmpegArgs(id, effect, fps, forceSoftware);
-  console.log(`Processando ${id} (${effect})${forceSoftware ? ' [CPU]' : ''}: ffmpeg ${args.join(' ')}`);
+  const args = ffmpegArgs(id, effect, speed, fps, forceSoftware);
+  console.log(`Processando ${id} (${effect}/${speed})${forceSoftware ? ' [CPU]' : ''}: ffmpeg ${args.join(' ')}`);
   const proc = spawn('ffmpeg', args);
   let errLog = '';
   proc.stderr.on('data', (d) => { errLog += d.toString().slice(-2000); });
@@ -145,7 +154,7 @@ function processVideo(id, effect, fps, forceSoftware = false) {
     if (!ok && !forceSoftware && ENCODER !== 'libx264') {
       // Encoder de hardware falhou (ex.: VAAPI sem GPU no container) -> tenta CPU.
       console.warn(`Encoder "${ENCODER}" falhou (code ${code}). Refazendo na CPU…`);
-      return processVideo(id, effect, fps, true);
+      return processVideo(id, effect, speed, fps, true);
     }
     finishProcessing(id, ok, ok ? null : ('ffmpeg code ' + code + '\n' + errLog), input, output);
   });
@@ -192,19 +201,20 @@ function handleUpload(req, res) {
   const id = isValidId(reqId) ? reqId : crypto.randomUUID();
   const name = (u.searchParams.get('name') || 'Prime360.mp4').replace(/[^\w.\- ]/g, '_');
   const effect = (u.searchParams.get('effect') || 'normal').toLowerCase();
+  const speed = (u.searchParams.get('speed') || 'normal').toLowerCase();
   const fps = u.searchParams.get('fps') || '20';
   const event = (u.searchParams.get('event') || '').replace(/[^\w.\- ]/g, '_');
 
   const out = fs.createWriteStream(rawPath(id));
   req.pipe(out);
   out.on('finish', () => {
-    writeMeta(id, { id, name, event, effect, status: 'processing', createdAt: Date.now() });
+    writeMeta(id, { id, name, event, effect, speed, status: 'processing', createdAt: Date.now() });
     // responde já com o link (QR instantâneo)
     send(res, 200, JSON.stringify({ id, url: `${baseUrl(req)}/v/${id}` }), {
       'Content-Type': 'application/json; charset=utf-8'
     });
     // processa em segundo plano
-    processVideo(id, effect, fps);
+    processVideo(id, effect, speed, fps);
   });
   out.on('error', () => send(res, 500, 'Falha ao salvar'));
   req.on('error', () => out.destroy());

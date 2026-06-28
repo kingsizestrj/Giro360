@@ -20,6 +20,7 @@ object UploadQueue {
         val eventId: String,
         val videoPath: String,
         val effect: String,
+        val speed: String,
         val fps: Int,
         val frameId: String?,
         val customFrameUri: String?,
@@ -85,7 +86,7 @@ object UploadQueue {
             val music = j.musicUri?.let { Uri.parse(it) }
 
             val r = CloudUploader.uploadJob(
-                context, j.videoPath, j.effect, j.fps, frameBytes, music, j.eventId
+                context, j.videoPath, j.effect, j.speed, j.fps, frameBytes, music, j.eventId
             )
             if (r is CloudUploader.Result.Success) {
                 EventStore.findRecording(context, j.recId)?.let {
@@ -103,6 +104,7 @@ object UploadQueue {
         put("eventId", j.eventId)
         put("videoPath", j.videoPath)
         put("effect", j.effect)
+        put("speed", j.speed)
         put("fps", j.fps)
         put("frameId", j.frameId ?: JSONObject.NULL)
         put("customFrameUri", j.customFrameUri ?: JSONObject.NULL)
@@ -114,6 +116,7 @@ object UploadQueue {
         eventId = o.optString("eventId"),
         videoPath = o.getString("videoPath"),
         effect = o.optString("effect", "normal"),
+        speed = o.optString("speed", "normal"),
         fps = o.optInt("fps", 20),
         frameId = o.optStringOrNull("frameId"),
         customFrameUri = o.optStringOrNull("customFrameUri"),

@@ -1,11 +1,18 @@
 package com.voltec.giro360
 
 /** Efeito aplicado ao vídeo gravado. */
+/** Tipo de movimento do vídeo. */
 enum class Effect(val label: String) {
     NORMAL("Normal"),
-    SLOW("Lento"),
     BOOMERANG("Boomerang"),
     REVERSE("Reverso")
+}
+
+/** Velocidade do vídeo (combina com qualquer efeito). */
+enum class Speed(val label: String) {
+    NORMAL("Veloc. normal"),
+    SLOW("Lento"),
+    FAST("Rápido")
 }
 
 /** Um evento (festa, casamento, etc.) que agrupa as gravações. */
@@ -14,7 +21,9 @@ data class Event(
     val name: String,
     val createdAt: Long,
     // Configurações padrão do evento
-    val effect: Effect = Effect.SLOW,
+    val effect: Effect = Effect.NORMAL,
+    val speed: Speed = Speed.NORMAL,
+    val wideAngle: Boolean = false,     // grande angular (mais ambiente), se houver
     val durationSeconds: Int = 8,
     val countdownSeconds: Int = 5,      // contagem regressiva antes de gravar
     // Parâmetros do boomerang (ajustáveis na hora)
