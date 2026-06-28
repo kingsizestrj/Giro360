@@ -126,7 +126,10 @@ fun CameraScreen(
 
     // Liga a câmera (recria quando a qualidade muda por causa do slow motion)
     LaunchedEffect(isSlow) {
-        val provider = ProcessCameraProvider.getInstance(context).get()
+        // getInstance().get() é bloqueante -> fora da main; bind volta para a main.
+        val provider = withContext(Dispatchers.IO) {
+            ProcessCameraProvider.getInstance(context).get()
+        }
         val result = bindCamera(context, provider, lifecycleOwner, previewView, isSlow)
         videoCapture = result.first
         camera = result.second
@@ -136,46 +139,58 @@ fun CameraScreen(
     // Aplica o zoom
     LaunchedEffect(zoom) { camera?.cameraControl?.setLinearZoom(zoom) }
 
+    // Ao sair da tela: encerra a gravação ativa (será finalizada e salva) e cancela a contagem.
+    DisposableEffect(Unit) {
+        onDispose {
+            try { recording?.stop() } catch (_: Exception) {}
+            recording = null
+            countdownJob?.cancel()
+        }
+    }
+
     fun finalizeRecording(sourcePath: String) {
-        // Processamento e upload SEMPRE em thread de fundo (evita travar e fechar o app).
-        scope.launch {
+        val appCtx = context.applicationContext
+        val curEffect = effect
+        val curMusic = musicUri
+        // Roda num escopo de aplicação (GiroScope): processamento, gravação e upload
+        // terminam mesmo se o usuário sair da tela — nada de vídeo perdido.
+        GiroScope.io.launch {
+            suspend fun ui(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
             try {
-                busyMessage = "Processando vídeo…"
-                val finalPath = withContext(Dispatchers.IO) {
-                    VideoProcessor.process(context, sourcePath, effect, musicUri)
-                }
+                ui { busyMessage = "Processando vídeo…" }
+                val finalPath = VideoProcessor.process(appCtx, sourcePath, curEffect, curMusic)
                 var saved = com.voltec.giro360.Recording(
                     id = UUID.randomUUID().toString(),
                     eventId = eventId,
                     filePath = finalPath,
                     createdAt = System.currentTimeMillis(),
-                    effect = effect
+                    effect = curEffect
                 )
-                withContext(Dispatchers.IO) { EventStore.addRecording(context, saved) }
+                EventStore.addRecording(appCtx, saved)
 
-                if (AppConfig.isConfigured(context)) {
-                    busyMessage = "Enviando ao servidor…"
-                    when (val result = withContext(Dispatchers.IO) {
-                        CloudUploader.upload(context, finalPath)
-                    }) {
+                if (AppConfig.isConfigured(appCtx)) {
+                    ui { busyMessage = "Enviando ao servidor…" }
+                    when (val result = CloudUploader.upload(appCtx, finalPath)) {
                         is CloudUploader.Result.Success -> {
                             saved = saved.copy(shareUrl = result.url)
-                            withContext(Dispatchers.IO) { EventStore.updateRecording(context, saved) }
-                            qrUrl = result.url // mostra o QR automaticamente
+                            EventStore.updateRecording(appCtx, saved)
+                            ui { qrUrl = result.url } // mostra o QR automaticamente
                         }
-                        is CloudUploader.Result.Error -> Toast.makeText(
-                            context, "Vídeo salvo. Falha no envio: ${result.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        is CloudUploader.Result.Error -> ui {
+                            Toast.makeText(
+                                appCtx, "Vídeo salvo. Falha no envio: ${result.message}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 } else {
-                    Toast.makeText(context, "Vídeo salvo!", Toast.LENGTH_SHORT).show()
+                    ui { Toast.makeText(appCtx, "Vídeo salvo!", Toast.LENGTH_SHORT).show() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao finalizar o vídeo", e)
-                Toast.makeText(context, "Erro ao processar o vídeo", Toast.LENGTH_LONG).show()
+                ui { Toast.makeText(appCtx, "Erro ao processar o vídeo", Toast.LENGTH_LONG).show() }
             } finally {
-                busyMessage = null
+                ui { busyMessage = null }
             }
         }
     }

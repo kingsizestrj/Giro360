@@ -65,7 +65,13 @@ class Mp4FrameEncoder(
     }
 
     fun finishAndMux() {
-        val inIndex = codec.dequeueInputBuffer(10_000)
+        // Garante o envio do EOS, tentando obter um input buffer por até ~1s.
+        var inIndex = -1
+        val eosDeadline = System.nanoTime() + 1_000_000_000L
+        while (inIndex < 0 && System.nanoTime() < eosDeadline) {
+            inIndex = codec.dequeueInputBuffer(10_000)
+            if (inIndex < 0) drain(false) // libera saídas pra abrir espaço de entrada
+        }
         if (inIndex >= 0) {
             codec.queueInputBuffer(
                 inIndex, 0, 0, frameIndex * 1_000_000L / fps,
@@ -77,12 +83,15 @@ class Mp4FrameEncoder(
     }
 
     private fun drain(endOfStream: Boolean) {
+        // Limite de tempo para não girar para sempre caso o EOS não chegue.
+        val deadline = System.nanoTime() + 4_000_000_000L
         while (true) {
+            if (endOfStream && System.nanoTime() > deadline) return
             val outIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)
             when {
                 outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
                     if (!endOfStream) return // ainda há mais a codificar
-                    // em EOS, continua esperando o último buffer
+                    // em EOS, continua esperando o último buffer (até o deadline)
                 }
                 outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     trackIndex = muxer.addTrack(codec.outputFormat)

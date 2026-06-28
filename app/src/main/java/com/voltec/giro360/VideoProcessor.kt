@@ -139,7 +139,14 @@ object VideoProcessor {
             val outAudioIndex = muxer.addTrack(musicFormat)
             muxer.start()
 
-            val buffer = ByteBuffer.allocate(1 shl 20)
+            // Buffer grande o suficiente para o maior sample (keyframes de vídeo
+            // podem passar de 1MB). Usa o KEY_MAX_INPUT_SIZE quando disponível.
+            val bufSize = maxOf(
+                videoFormat.getIntOrZero(MediaFormat.KEY_MAX_INPUT_SIZE),
+                musicFormat.getIntOrZero(MediaFormat.KEY_MAX_INPUT_SIZE),
+                4 * 1024 * 1024
+            )
+            val buffer = ByteBuffer.allocate(bufSize)
             val info = MediaCodec.BufferInfo()
 
             // copia vídeo
@@ -194,6 +201,9 @@ object VideoProcessor {
 
     private fun MediaFormat.getLongOrZero(key: String): Long =
         if (containsKey(key)) getLong(key) else 0L
+
+    private fun MediaFormat.getIntOrZero(key: String): Int =
+        if (containsKey(key)) getInteger(key) else 0
 
     private fun MediaExtractor.sampleFlagsCompat(): Int {
         var flags = 0
