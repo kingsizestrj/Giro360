@@ -37,19 +37,28 @@ object VideoProcessor {
         effect: Effect,
         musicUri: Uri?,
         boomerangFps: Int = 20,
-        boomerangClipMs: Int = 1200,
         boomerangWidth: Int = 480,
         onStatus: (String) -> Unit = {}
     ): String {
         var current = inputPath
-        if (effect == Effect.BOOMERANG) {
-            current = runCatching {
-                makeBoomerang(current, boomerangFps, boomerangClipMs, boomerangWidth, onStatus)
-            }
-                .getOrElse {
+        when (effect) {
+            Effect.BOOMERANG -> {
+                current = runCatching {
+                    makeBoomerang(current, boomerangFps, boomerangWidth, onStatus)
+                }.getOrElse {
                     Log.w(TAG, "Falha ao gerar boomerang, mantendo vídeo normal", it)
                     current
                 }
+            }
+            Effect.SLOW -> {
+                onStatus("Aplicando câmera lenta…")
+                current = runCatching { makeSlowMotion(current, 2.0f) }
+                    .getOrElse {
+                        Log.w(TAG, "Falha na câmera lenta, mantendo vídeo normal", it)
+                        current
+                    }
+            }
+            Effect.NORMAL -> {}
         }
         if (musicUri != null) {
             onStatus("Juntando música…")
@@ -63,19 +72,19 @@ object VideoProcessor {
     }
 
     /**
-     * Gera o efeito boomerang: reproduz os quadros na ida e depois na volta,
-     * criando um loop "vai-e-volta". Recodifica num MP4 novo (sem áudio).
+     * Boomerang igual aos apps de cabine 360: usa a gravação INTEIRA, reproduzindo
+     * de ida e depois de volta (vai-e-volta) — a duração acompanha o que foi gravado.
+     * Faz streaming (1 quadro por vez) para não estourar a memória em vídeos longos.
+     * Recodifica num MP4 novo (sem áudio).
      */
     private fun makeBoomerang(
         inputPath: String,
         fps: Int,
-        clipMs: Int,
         maxWidth: Int,
         onStatus: (String) -> Unit
     ): String {
         val retriever = MediaMetadataRetriever()
         retriever.setDataSource(inputPath)
-        val frames = ArrayList<Bitmap>()
         try {
             val durMs = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_DURATION
@@ -86,57 +95,81 @@ object VideoProcessor {
                 MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
             )?.toIntOrNull() ?: 0
 
+            // Usa a gravação inteira (limite de 12s para o processamento não demorar demais).
+            val clipUs = min(durUs, 12_000_000L)
+            // Quantos quadros na ida; a volta reaproveita os mesmos tempos.
+            val forwardFrames = ((clipUs / 1_000_000.0) * fps).toInt().coerceIn(2, 160)
+            val stepUs = clipUs / forwardFrames
+
             val first = upright(frameAt(retriever, 0) ?: return inputPath, rotation)
             val targetW = min(maxWidth, first.width).let { if (it % 2 == 0) it else it - 1 }
             val targetH = (first.height * targetW.toFloat() / first.width)
                 .roundToInt().let { if (it % 2 == 0) it else it - 1 }
             first.recycle()
 
-            val clipUs = min(durUs, clipMs * 1000L)
-            var frameCount = ((clipUs / 1_000_000.0) * fps).toInt().coerceIn(2, 90)
-            // Limita pela memória do cache de quadros para não estourar (OOM). O
-            // orçamento escala com a RAM do app: aparelho mais potente usa mais quadros.
-            val heapBudget = (Runtime.getRuntime().maxMemory() / 6)
-                .coerceIn(40_000_000L, 220_000_000L)
-            val bytesPerFrame = targetW.toLong() * targetH * 4
-            val maxByMem = (heapBudget / bytesPerFrame).toInt().coerceAtLeast(2)
-            if (frameCount > maxByMem) frameCount = maxByMem
-            val stepUs = clipUs / frameCount
-
-            // Decodifica, endireita e escala cada quadro UMA vez (cache) — reusado na volta.
-            onStatus("Boomerang… 0%")
-            for (i in 0 until frameCount) {
-                val raw = frameAt(retriever, i * stepUs) ?: continue
+            val outFile = File(File(inputPath).parentFile, "boom_${File(inputPath).name}")
+            val encoder = Mp4FrameEncoder(targetW, targetH, fps, outFile)
+            val totalEnc = forwardFrames * 2 - 2
+            var enc = 0
+            fun encodeAt(timeUs: Long) {
+                val raw = frameAt(retriever, timeUs) ?: return
                 val up = upright(raw, rotation)
                 val scaled = if (up.width != targetW || up.height != targetH)
                     Bitmap.createScaledBitmap(up, targetW, targetH, true) else up
                 if (scaled !== up) up.recycle()
-                frames.add(scaled)
-                onStatus("Boomerang… ${(i + 1) * 40 / frameCount}%")
+                encoder.encodeFrame(scaled)
+                scaled.recycle()
+                enc++
+                onStatus("Boomerang… ${(enc * 100 / totalEnc).coerceAtMost(99)}%")
             }
-            if (frames.size < 2) return inputPath
-
-            val outFile = File(File(inputPath).parentFile, "boom_${File(inputPath).name}")
-            val encoder = Mp4FrameEncoder(targetW, targetH, fps, outFile)
-            val totalEnc = frames.size * 2 - 2
-            var enc = 0
             // ida
-            for (f in frames) {
-                encoder.encodeFrame(f); enc++
-                onStatus("Boomerang… ${40 + enc * 60 / totalEnc}%")
-            }
+            for (i in 0 until forwardFrames) encodeAt(i * stepUs)
             // volta (sem repetir as pontas, pra não "travar" no loop)
-            for (i in frames.size - 2 downTo 1) {
-                encoder.encodeFrame(frames[i]); enc++
-                onStatus("Boomerang… ${40 + enc * 60 / totalEnc}%")
-            }
+            for (i in forwardFrames - 2 downTo 1) encodeAt(i * stepUs)
             encoder.finishAndMux()
 
             File(inputPath).delete()
             return outFile.absolutePath
         } finally {
-            frames.forEach { it.recycle() }
             retriever.release()
+        }
+    }
+
+    /**
+     * Câmera lenta REAL: re-muxa a faixa de vídeo multiplicando os tempos (PTS) por
+     * [factor], deixando o vídeo mais lento sem reencodar (rápido e sem perder qualidade).
+     * O áudio é descartado (câmera lenta normalmente é sem som).
+     */
+    private fun makeSlowMotion(inputPath: String, factor: Float): String {
+        val extractor = MediaExtractor().apply { setDataSource(inputPath) }
+        try {
+            val videoTrack = firstTrackOfType(extractor, "video/") ?: return inputPath
+            val format = extractor.getTrackFormat(videoTrack)
+            val outFile = File(File(inputPath).parentFile, "slow_${File(inputPath).name}")
+            val muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            val outIndex = muxer.addTrack(format)
+            muxer.start()
+
+            val bufSize = maxOf(format.getIntOrZero(MediaFormat.KEY_MAX_INPUT_SIZE), 4 * 1024 * 1024)
+            val buffer = ByteBuffer.allocate(bufSize)
+            val info = MediaCodec.BufferInfo()
+            extractor.selectTrack(videoTrack)
+            while (true) {
+                val size = extractor.readSampleData(buffer, 0)
+                if (size < 0) break
+                info.offset = 0
+                info.size = size
+                info.presentationTimeUs = (extractor.sampleTime.toDouble() * factor).toLong()
+                info.flags = extractor.sampleFlagsCompat()
+                muxer.writeSampleData(outIndex, buffer, info)
+                extractor.advance()
+            }
+            muxer.stop()
+            muxer.release()
+            File(inputPath).delete()
+            return outFile.absolutePath
+        } finally {
+            extractor.release()
         }
     }
 

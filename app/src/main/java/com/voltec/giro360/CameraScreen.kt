@@ -2,7 +2,10 @@ package com.voltec.giro360
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.util.Log
+import android.view.Surface
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,7 +83,6 @@ fun CameraScreen(
     var musicUri by remember { mutableStateOf(ev.musicUri?.let { Uri.parse(it) }) }
     var musicName by remember { mutableStateOf(ev.musicName) }
     var boomFps by remember { mutableStateOf(ev.boomerangFps) }
-    var boomClipMs by remember { mutableStateOf(ev.boomerangClipMs) }
     var boomWidth by remember { mutableStateOf(ev.boomerangWidth) }
 
     // Salva as configurações no evento sempre que algo muda
@@ -90,7 +92,6 @@ fun CameraScreen(
             durationSeconds = duration,
             countdownSeconds = countdownSeconds,
             boomerangFps = boomFps,
-            boomerangClipMs = boomClipMs,
             boomerangWidth = boomWidth,
             frameId = frameId,
             customFrameUri = customFrameUri?.toString(),
@@ -159,7 +160,6 @@ fun CameraScreen(
         val curEffect = effect
         val curMusic = musicUri
         val curFps = boomFps
-        val curClip = boomClipMs
         val curW = boomWidth
         // Roda num escopo de aplicação (GiroScope): processamento, gravação e upload
         // terminam mesmo se o usuário sair da tela — nada de vídeo perdido.
@@ -168,7 +168,7 @@ fun CameraScreen(
             try {
                 ui { busyMessage = "Processando vídeo…" }
                 val finalPath = VideoProcessor.process(
-                    appCtx, sourcePath, curEffect, curMusic, curFps, curClip, curW
+                    appCtx, sourcePath, curEffect, curMusic, curFps, curW
                 ) { s -> busyMessage = s }
                 var saved = com.voltec.giro360.Recording(
                     id = UUID.randomUUID().toString(),
@@ -308,7 +308,6 @@ fun CameraScreen(
                 duration = duration, onDuration = { duration = it; persist() },
                 countdown = countdownSeconds, onCountdown = { countdownSeconds = it; persist() },
                 boomFps = boomFps, onBoomFps = { boomFps = it; persist() },
-                boomClipMs = boomClipMs, onBoomClipMs = { boomClipMs = it; persist() },
                 boomWidth = boomWidth, onBoomWidth = { boomWidth = it; persist() },
                 frameId = frameId,
                 onFrame = { customFrameUri = null; frameId = it; persist() },
@@ -400,7 +399,6 @@ private fun SettingsPanel(
     duration: Int, onDuration: (Int) -> Unit,
     countdown: Int, onCountdown: (Int) -> Unit,
     boomFps: Int, onBoomFps: (Int) -> Unit,
-    boomClipMs: Int, onBoomClipMs: (Int) -> Unit,
     boomWidth: Int, onBoomWidth: (Int) -> Unit,
     frameId: String?, onFrame: (String) -> Unit, onPickFrame: () -> Unit, onNoFrame: () -> Unit,
     musicName: String?, onPickMusic: () -> Unit, onClearMusic: () -> Unit,
@@ -428,12 +426,6 @@ private fun SettingsPanel(
                 Slider(
                     value = boomFps.toFloat(), onValueChange = { onBoomFps(it.toInt()) },
                     valueRange = 12f..30f, steps = 17
-                )
-                Text("Duração do trecho: ${"%.1f".format(boomClipMs / 1000f)}s",
-                    color = Color.White, fontSize = 13.sp)
-                Slider(
-                    value = boomClipMs.toFloat(), onValueChange = { onBoomClipMs((it / 100).toInt() * 100) },
-                    valueRange = 600f..2500f
                 )
                 Text("Qualidade", color = Color.White, fontSize = 13.sp)
                 Row(
@@ -518,6 +510,18 @@ fun RecordButton(isRecording: Boolean, onClick: () -> Unit) {
 
 // ---------- Lógica de câmera ----------
 
+@Suppress("DEPRECATION")
+private fun displayRotation(context: Context): Int = try {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        context.display?.rotation ?: Surface.ROTATION_0
+    } else {
+        (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+            .defaultDisplay.rotation
+    }
+} catch (e: Exception) {
+    Surface.ROTATION_0
+}
+
 private fun bindCamera(
     context: Context,
     provider: ProcessCameraProvider,
@@ -525,7 +529,10 @@ private fun bindCamera(
     previewView: PreviewView,
     slowMotion: Boolean
 ): Pair<VideoCapture<Recorder>?, Camera?> {
-    val preview = Preview.Builder().build().also {
+    // Orientação correta do vídeo/preview (corrige vídeo saindo deitado).
+    val targetRotation = displayRotation(context)
+
+    val preview = Preview.Builder().setTargetRotation(targetRotation).build().also {
         it.surfaceProvider = previewView.surfaceProvider
     }
     // Sempre a melhor qualidade que o aparelho oferecer (UHD > FHD > HD > SD).
@@ -537,7 +544,7 @@ private fun bindCamera(
 
     fun buildVideoCapture(stab: Boolean): VideoCapture<Recorder> {
         val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
-        val builder = VideoCapture.Builder(recorder)
+        val builder = VideoCapture.Builder(recorder).setTargetRotation(targetRotation)
         if (stab) builder.setVideoStabilizationEnabled(true)
         return builder.build()
     }
