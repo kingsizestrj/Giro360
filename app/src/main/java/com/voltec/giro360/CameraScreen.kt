@@ -35,6 +35,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -44,9 +45,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -100,6 +103,9 @@ fun CameraScreen(
     var showSettings by remember { mutableStateOf(false) }
     var countdown by remember { mutableStateOf(0) }
     var countdownJob by remember { mutableStateOf<Job?>(null) }
+    var recordProgress by remember { mutableStateOf(0f) }
+    var busyMessage by remember { mutableStateOf<String?>(null) }
+    var qrUrl by remember { mutableStateOf<String?>(null) }
     val previewView = remember { PreviewView(context) }
 
     val isSlow = effect == Effect.SLOW
@@ -130,31 +136,62 @@ fun CameraScreen(
     // Aplica o zoom
     LaunchedEffect(zoom) { camera?.cameraControl?.setLinearZoom(zoom) }
 
+    fun finalizeRecording(sourcePath: String) {
+        // Processamento e upload SEMPRE em thread de fundo (evita travar e fechar o app).
+        scope.launch {
+            try {
+                busyMessage = "Processando vídeo…"
+                val finalPath = withContext(Dispatchers.IO) {
+                    VideoProcessor.process(context, sourcePath, effect, musicUri)
+                }
+                var saved = com.voltec.giro360.Recording(
+                    id = UUID.randomUUID().toString(),
+                    eventId = eventId,
+                    filePath = finalPath,
+                    createdAt = System.currentTimeMillis(),
+                    effect = effect
+                )
+                withContext(Dispatchers.IO) { EventStore.addRecording(context, saved) }
+
+                if (AppConfig.isConfigured(context)) {
+                    busyMessage = "Enviando ao servidor…"
+                    when (val result = withContext(Dispatchers.IO) {
+                        CloudUploader.upload(context, finalPath)
+                    }) {
+                        is CloudUploader.Result.Success -> {
+                            saved = saved.copy(shareUrl = result.url)
+                            withContext(Dispatchers.IO) { EventStore.updateRecording(context, saved) }
+                            qrUrl = result.url // mostra o QR automaticamente
+                        }
+                        is CloudUploader.Result.Error -> Toast.makeText(
+                            context, "Vídeo salvo. Falha no envio: ${result.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } else {
+                    Toast.makeText(context, "Vídeo salvo!", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao finalizar o vídeo", e)
+                Toast.makeText(context, "Erro ao processar o vídeo", Toast.LENGTH_LONG).show()
+            } finally {
+                busyMessage = null
+            }
+        }
+    }
+
     fun beginRecording() {
         val vc = videoCapture ?: return
         if (isRecording) return
+        recordProgress = 0f
         recording = startRecordingToFile(context, vc) { rec, finalEvent ->
             when (finalEvent) {
                 is VideoRecordEvent.Start -> isRecording = true
                 is VideoRecordEvent.Finalize -> {
                     isRecording = false
+                    recordProgress = 0f
                     if (!finalEvent.hasError()) {
-                        scope.launch {
-                            val finalPath = VideoProcessor.process(
-                                context, rec.absolutePath, effect, musicUri
-                            )
-                            EventStore.addRecording(
-                                context,
-                                Recording(
-                                    id = UUID.randomUUID().toString(),
-                                    eventId = eventId,
-                                    filePath = finalPath,
-                                    createdAt = System.currentTimeMillis(),
-                                    effect = effect
-                                )
-                            )
-                            Toast.makeText(context, "Vídeo salvo!", Toast.LENGTH_SHORT).show()
-                        }
+                        finalizeRecording(rec.absolutePath)
                     } else {
                         Log.e(TAG, "Erro ao gravar: ${finalEvent.error}")
                         File(rec.absolutePath).delete()
@@ -162,9 +199,16 @@ fun CameraScreen(
                 }
             }
         }
-        // para automaticamente após a duração configurada
+        // Progresso (anel ao redor do botão) + parada automática após a duração.
         scope.launch {
-            delay(duration * 1000L)
+            val total = (duration * 1000L).coerceAtLeast(1L)
+            var elapsed = 0L
+            while (elapsed < total) {
+                delay(50)
+                if (recording == null) { recordProgress = 0f; return@launch } // parado manualmente
+                elapsed += 50
+                recordProgress = (elapsed.toFloat() / total).coerceIn(0f, 1f)
+            }
             recording?.stop()
             recording = null
         }
@@ -271,8 +315,50 @@ fun CameraScreen(
                 color = Color.White, fontSize = 13.sp
             )
             Spacer(Modifier.height(12.dp))
-            RecordButton(isRecording = isRecording, onClick = ::toggleRecording)
+            Box(contentAlignment = Alignment.Center) {
+                if (isRecording) {
+                    CircularProgressIndicator(
+                        progress = { recordProgress },
+                        modifier = Modifier.size(98.dp),
+                        color = Color.Red,
+                        trackColor = Color(0x55FFFFFF),
+                        strokeWidth = 5.dp
+                    )
+                }
+                RecordButton(isRecording = isRecording, onClick = ::toggleRecording)
+            }
         }
+    }
+
+    // Overlay de processamento/envio
+    busyMessage?.let { msg ->
+        Box(
+            Modifier.fillMaxSize().background(Color(0xB3000000)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = Color.White)
+                Spacer(Modifier.height(16.dp))
+                Text(msg, color = Color.White)
+            }
+        }
+    }
+
+    // QR Code automático após o envio ao servidor
+    qrUrl?.let { url ->
+        val qr = remember(url) { ShareUtil.generateQr(url) }
+        AlertDialog(
+            onDismissRequest = { qrUrl = null },
+            confirmButton = { TextButton(onClick = { qrUrl = null }) { Text("Fechar") } },
+            title = { Text("QR Code do vídeo") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    qr?.let { Image(it.asImageBitmap(), "QR", Modifier.size(220.dp)) }
+                    Spacer(Modifier.height(8.dp))
+                    Text("O cliente aponta a câmera para baixar o vídeo.", fontSize = 13.sp)
+                }
+            }
+        )
     }
 }
 
