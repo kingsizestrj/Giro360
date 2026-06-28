@@ -42,6 +42,45 @@ object ShareUtil {
     }
 
     /**
+     * Envia o ARQUIVO do vídeo direto para o WhatsApp. O WhatsApp abre com o
+     * vídeo anexado e o usuário escolhe o contato lá dentro. Se o WhatsApp não
+     * estiver instalado, cai no seletor padrão de compartilhamento.
+     */
+    fun sendVideoToWhatsApp(context: Context, filePath: String) {
+        val file = File(filePath)
+        if (!file.exists()) return
+        val uri = uriFor(context, file)
+        fun base() = Intent(Intent.ACTION_SEND).apply {
+            type = "video/mp4"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        // "com.whatsapp" = WhatsApp normal; "com.whatsapp.w4b" = WhatsApp Business
+        val installed = listOf("com.whatsapp", "com.whatsapp.w4b").filter { pkg ->
+            base().setPackage(pkg).resolveActivity(context.packageManager) != null
+        }
+        try {
+            when (installed.size) {
+                1 -> context.startActivity(base().setPackage(installed[0]))
+                0 -> context.startActivity(Intent.createChooser(base(), "Enviar vídeo"))
+                else -> {
+                    // Os dois instalados: seletor só com os WhatsApp
+                    val chooser = Intent.createChooser(
+                        base().setPackage(installed[0]), "Enviar para"
+                    )
+                    val extras = installed.drop(1)
+                        .map { base().setPackage(it) }
+                        .toTypedArray()
+                    chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, extras)
+                    context.startActivity(chooser)
+                }
+            }
+        } catch (e: Exception) {
+            context.startActivity(Intent.createChooser(base(), "Enviar vídeo"))
+        }
+    }
+
+    /**
      * Abre o WhatsApp já na conversa do número informado, com a mensagem pronta.
      * Envia o LINK do vídeo (não o arquivo) — é assim que o WhatsApp permite
      * mandar direto para um número.

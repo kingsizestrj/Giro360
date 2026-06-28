@@ -86,7 +86,10 @@ fun GalleryScreen(eventId: String, onBack: () -> Unit) {
                     ActionRow(Icons.Filled.PlayArrow, "Reproduzir") {
                         ShareUtil.playVideo(context, rec.filePath); selected = null
                     }
-                    ActionRow(Icons.Filled.Send, "Enviar no WhatsApp (por número)") {
+                    ActionRow(Icons.Filled.Send, "Enviar vídeo no WhatsApp") {
+                        ShareUtil.sendVideoToWhatsApp(context, rec.filePath); selected = null
+                    }
+                    ActionRow(Icons.Filled.Link, "WhatsApp: link por número") {
                         waFor = rec; selected = null
                     }
                     ActionRow(Icons.Filled.Share, "Compartilhar (outros apps)") {
