@@ -535,12 +535,6 @@ private fun bindCamera(
     )
     val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-    // Estabilização de vídeo, se o aparelho suportar.
-    val stabSupported = try {
-        cameraSelector.filter(provider.availableCameraInfos)
-            .firstOrNull()?.isVideoStabilizationSupported() == true
-    } catch (e: Exception) { false }
-
     fun buildVideoCapture(stab: Boolean): VideoCapture<Recorder> {
         val recorder = Recorder.Builder().setQualitySelector(qualitySelector).build()
         val builder = VideoCapture.Builder(recorder)
@@ -548,9 +542,11 @@ private fun bindCamera(
         return builder.build()
     }
 
+    // Tenta com estabilização de vídeo; se o aparelho não suportar, o bind falha
+    // e caímos no fallback sem estabilização.
     return try {
         provider.unbindAll()
-        val videoCapture = buildVideoCapture(stabSupported)
+        val videoCapture = buildVideoCapture(true)
         val camera = provider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, videoCapture)
         videoCapture to camera
     } catch (e: Exception) {
