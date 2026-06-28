@@ -60,4 +60,7 @@ dependencies {
 
     // Para carregar a moldura PNG escolhida da galeria
     implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // Geração de QR Code
+    implementation("com.google.zxing:core:3.5.3")
 }
