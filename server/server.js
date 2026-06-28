@@ -429,5 +429,15 @@ if (RETENTION_DAYS > 0) {
 server.listen(PORT, () => {
   console.log(`Prime360 server na porta ${PORT} (dados em ${VIDEOS_DIR})`);
   if (!API_KEY) console.warn('AVISO: API_KEY vazia — qualquer um pode enviar vídeos!');
+  if (!PUBLIC_BASE_URL) {
+    console.warn('=================================================================');
+    console.warn('AVISO: PUBLIC_BASE_URL VAZIA! O QR do vídeo vai usar o endereço');
+    console.warn('por onde o app chegou (provável IP da LAN, ex.: 192.168.x.x:8080).');
+    console.warn('Esse QR SÓ funciona no Wi-Fi local — clientes no 4G não baixam.');
+    console.warn('Defina PUBLIC_BASE_URL com seu domínio no .env e refaça o build.');
+    console.warn('=================================================================');
+  } else {
+    console.log(`QR dos vídeos usará: ${PUBLIC_BASE_URL}`);
+  }
   if (RETENTION_DAYS > 0) console.log(`Retenção: apaga vídeos com mais de ${RETENTION_DAYS} dia(s).`);
 });
