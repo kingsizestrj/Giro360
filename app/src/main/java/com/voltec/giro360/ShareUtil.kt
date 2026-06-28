@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.Uri
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -37,6 +39,21 @@ object ShareUtil {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(intent)
+    }
+
+    /**
+     * Abre o WhatsApp já na conversa do número informado, com a mensagem pronta.
+     * Envia o LINK do vídeo (não o arquivo) — é assim que o WhatsApp permite
+     * mandar direto para um número.
+     */
+    fun sendWhatsApp(context: Context, phone: String, text: String) {
+        val digits = phone.filter { it.isDigit() }
+        val url = "https://wa.me/$digits?text=" + Uri.encode(text)
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Não foi possível abrir o WhatsApp", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** Gera um QR Code (bitmap) a partir de um texto/link. */

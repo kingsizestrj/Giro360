@@ -36,6 +36,7 @@ fun GalleryScreen(eventId: String, onBack: () -> Unit) {
     var recordings by remember { mutableStateOf(EventStore.loadRecordings(context, eventId)) }
     var selected by remember { mutableStateOf<Recording?>(null) }
     var qrFor by remember { mutableStateOf<Recording?>(null) }
+    var waFor by remember { mutableStateOf<Recording?>(null) }
 
     fun refresh() { recordings = EventStore.loadRecordings(context, eventId) }
 
@@ -85,7 +86,10 @@ fun GalleryScreen(eventId: String, onBack: () -> Unit) {
                     ActionRow(Icons.Filled.PlayArrow, "Reproduzir") {
                         ShareUtil.playVideo(context, rec.filePath); selected = null
                     }
-                    ActionRow(Icons.Filled.Share, "Compartilhar (WhatsApp, etc.)") {
+                    ActionRow(Icons.Filled.Send, "Enviar no WhatsApp (por número)") {
+                        waFor = rec; selected = null
+                    }
+                    ActionRow(Icons.Filled.Share, "Compartilhar (outros apps)") {
                         ShareUtil.shareVideo(context, rec.filePath); selected = null
                     }
                     ActionRow(Icons.Filled.QrCode2, "QR Code") {
@@ -102,6 +106,11 @@ fun GalleryScreen(eventId: String, onBack: () -> Unit) {
     // QR Code
     qrFor?.let { rec ->
         QrDialog(rec, onUpdated = { refresh() }, onDismiss = { qrFor = null })
+    }
+
+    // WhatsApp por número
+    waFor?.let { rec ->
+        WhatsAppDialog(rec, onUpdated = { refresh() }, onDismiss = { waFor = null })
     }
 }
 
@@ -181,6 +190,96 @@ private fun QrDialog(rec: Recording, onUpdated: () -> Unit, onDismiss: () -> Uni
                 }
             }
         }
+    )
+}
+
+@Composable
+private fun WhatsAppDialog(rec: Recording, onUpdated: () -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var phone by remember { mutableStateOf("+55 ") }
+    var shareUrl by remember { mutableStateOf(rec.shareUrl) }
+    var sending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val configured = remember { AppConfig.isConfigured(context) }
+    val ready = configured || shareUrl != null
+
+    fun openWhatsApp(url: String) {
+        ShareUtil.sendWhatsApp(context, phone, "Seu vídeo Giro360: $url")
+        onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Enviar no WhatsApp") },
+        text = {
+            Column {
+                if (!ready) {
+                    Text(
+                        "Para enviar por número, configure o servidor de vídeos (engrenagem na " +
+                            "tela inicial). O WhatsApp envia o link de download do vídeo.",
+                        fontSize = 13.sp
+                    )
+                } else {
+                    Text(
+                        "Digite o número com DDD (e país). O WhatsApp abre na conversa com o " +
+                            "link do vídeo pronto para enviar.",
+                        fontSize = 13.sp, color = Color.Gray
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = phone, onValueChange = { phone = it },
+                        label = { Text("Número") },
+                        placeholder = { Text("+55 11 99999-8888") },
+                        singleLine = true
+                    )
+                    error?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Erro: $it", color = Color(0xFFEF5350), fontSize = 13.sp)
+                    }
+                    if (sending) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Enviando vídeo ao servidor…", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (ready) {
+                TextButton(
+                    enabled = !sending && phone.any { it.isDigit() },
+                    onClick = {
+                        val url = shareUrl
+                        if (url != null) {
+                            openWhatsApp(url)
+                        } else {
+                            sending = true; error = null
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    CloudUploader.upload(context, rec.filePath)
+                                }
+                                sending = false
+                                when (result) {
+                                    is CloudUploader.Result.Success -> {
+                                        val updated = rec.copy(shareUrl = result.url)
+                                        EventStore.updateRecording(context, updated)
+                                        shareUrl = result.url
+                                        onUpdated()
+                                        openWhatsApp(result.url)
+                                    }
+                                    is CloudUploader.Result.Error -> error = result.message
+                                }
+                            }
+                        }
+                    }
+                ) { Text("Enviar") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Fechar") } }
     )
 }
 
