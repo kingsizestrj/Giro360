@@ -44,7 +44,13 @@ object VideoProcessor {
         var current = inputPath
         // 1) Movimento
         when (effect) {
-            Effect.BOOMERANG -> {
+            // No aparelho (modo sem servidor) as variantes com velocidade por trecho
+            // viram um boomerang comum; a velocidade por metade só é aplicada no servidor.
+            Effect.BOOMERANG,
+            Effect.BOOMERANG_SLOWBACK,
+            Effect.BOOMERANG_SLOWFWD,
+            Effect.BOOMERANG_FASTBACK,
+            Effect.BOOMERANG_SLOWZOOM -> {
                 current = runCatching {
                     makeBoomerang(current, boomerangFps, boomerangWidth, onStatus)
                 }.getOrElse {

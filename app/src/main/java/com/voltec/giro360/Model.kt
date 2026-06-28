@@ -5,6 +5,10 @@ package com.voltec.giro360
 enum class Effect(val label: String) {
     NORMAL("Normal"),
     BOOMERANG("Boomerang"),
+    BOOMERANG_SLOWBACK("Boom. volta lenta"),
+    BOOMERANG_SLOWFWD("Boom. ida lenta"),
+    BOOMERANG_FASTBACK("Boom. volta rápida"),
+    BOOMERANG_SLOWZOOM("Boom. zoom lento"),
     REVERSE("Reverso")
 }
 

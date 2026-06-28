@@ -7,7 +7,7 @@
  * (QR) na HORA e processa o efeito em segundo plano (FFmpeg). Quando o cliente
  * escaneia o QR, vê "processando" e, ao terminar, o vídeo pronto para baixar.
  *
- * - POST /upload?effect=boomerang|reverse|normal&speed=normal|slow|fast&fps=20&name=...  -> { id, url } (imediato)
+ * - POST /upload?effect=boomerang|boomerang_slowback|boomerang_slowfwd|boomerang_fastback|boomerang_slowzoom|reverse|normal&speed=normal|slow|fast&fps=20&name=...  -> { id, url } (imediato)
  * - GET  /v/:id      -> página: "processando" (auto-refresh) ou vídeo + download
  * - GET  /status/:id -> { status: processing|done|error }
  * - GET  /raw/:id    -> stream do vídeo final (com Range)
@@ -78,10 +78,36 @@ function send(res, status, body, headers) {
   res.end(body);
 }
 
+// Descobre a resolução do vídeo bruto (usado pelo zoom do boomerang).
+function probeSize(input, cb) {
+  let out = '';
+  try {
+    const pr = spawn('ffprobe', [
+      '-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', input
+    ]);
+    pr.stdout.on('data', (d) => { out += d.toString(); });
+    pr.on('error', () => cb(null));
+    pr.on('close', () => {
+      const m = /(\d+)x(\d+)/.exec(out.trim());
+      cb(m ? { w: parseInt(m[1], 10), h: parseInt(m[2], 10) } : null);
+    });
+  } catch (e) { cb(null); }
+}
+
+// Sub-filtros do boomerang: o que aplicar na IDA ([a]) e na VOLTA ([b] invertida).
+// A velocidade por trecho (setpts) é o que dá "ida normal, volta lenta", etc.
+const BOOM_VARIANTS = {
+  boomerang:          { fwd: null,             back: 'reverse' },
+  boomerang_slowback: { fwd: null,             back: 'reverse,setpts=2.0*PTS' },
+  boomerang_slowfwd:  { fwd: 'setpts=2.0*PTS', back: 'reverse' },
+  boomerang_fastback: { fwd: null,             back: 'reverse,setpts=0.5*PTS' }
+};
+
 // ---------- Processamento (FFmpeg) ----------
-// effect: normal|boomerang|reverse  (movimento)
-// speed:  normal|slow|fast          (combina com o efeito)
-function ffmpegArgs(id, effect, speed, fps, forceSoftware) {
+// effect: normal|boomerang|boomerang_*|reverse  (movimento)
+// speed:  normal|slow|fast                       (combina com o efeito)
+function ffmpegArgs(id, effect, speed, fps, forceSoftware, dims) {
   const useVaapi = isVaapi && !forceSoftware;
   const f = Math.max(8, Math.min(60, parseInt(fps, 10) || 20));
   const input = rawPath(id);
@@ -101,9 +127,30 @@ function ffmpegArgs(id, effect, speed, fps, forceSoftware) {
 
   // Cadeia de vídeo: (escala) -> efeito -> (velocidade) -> (moldura) -> formato -> [vout]
   let fc;
-  if (effect === 'boomerang') {
-    // divide em duas cópias: uma normal e uma invertida, e concatena (ida+volta)
-    fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0[fx];`;
+  if (effect === 'boomerang_slowzoom') {
+    // volta em câmera lenta + zoom suave de aproximação (precisa do tamanho do quadro).
+    let W = dims ? dims.w : 0, H = dims ? dims.h : 0;
+    if (dims && MAX_HEIGHT > 0 && dims.h > MAX_HEIGHT) {
+      H = MAX_HEIGHT; W = Math.round(dims.w * MAX_HEIGHT / dims.h);
+    }
+    W -= W % 2; H -= H % 2;
+    if (W > 0 && H > 0) {
+      const zp = `zoompan=z='min(zoom+0.0018,1.22)':d=1:` +
+        `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${f}`;
+      fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse,setpts=2.0*PTS,${zp}[r];` +
+        `[a][r]concat=n=2:v=1:a=0[fx];`;
+    } else {
+      // sem dimensões -> cai para "volta lenta" sem zoom (ainda fica bom)
+      fc = `[0:v]${scale}fps=${f},split[a][b];[b]reverse,setpts=2.0*PTS[r];` +
+        `[a][r]concat=n=2:v=1:a=0[fx];`;
+    }
+  } else if (BOOM_VARIANTS[effect]) {
+    // ida ([a]) + volta invertida ([b]) com velocidade por trecho, depois concatena.
+    const v = BOOM_VARIANTS[effect];
+    fc = `[0:v]${scale}fps=${f},split[a][b];`;
+    fc += v.fwd ? `[a]${v.fwd}[af];` : `[a]null[af];`;
+    fc += `[b]${v.back}[r];`;
+    fc += `[af][r]concat=n=2:v=1:a=0[fx];`;
   } else if (effect === 'reverse') {
     fc = `[0:v]${scale}reverse[fx];`;
   } else {
@@ -141,9 +188,17 @@ function ffmpegArgs(id, effect, speed, fps, forceSoftware) {
 }
 
 function processVideo(id, effect, speed, fps, forceSoftware = false) {
+  // O zoom do boomerang precisa do tamanho do quadro -> mede antes (ffprobe).
+  if (effect === 'boomerang_slowzoom') {
+    return probeSize(rawPath(id), (dims) => runFfmpeg(id, effect, speed, fps, forceSoftware, dims));
+  }
+  return runFfmpeg(id, effect, speed, fps, forceSoftware, null);
+}
+
+function runFfmpeg(id, effect, speed, fps, forceSoftware, dims) {
   const input = rawPath(id);
   const output = finalPath(id);
-  const args = ffmpegArgs(id, effect, speed, fps, forceSoftware);
+  const args = ffmpegArgs(id, effect, speed, fps, forceSoftware, dims);
   console.log(`Processando ${id} (${effect}/${speed})${forceSoftware ? ' [CPU]' : ''}: ffmpeg ${args.join(' ')}`);
   const proc = spawn('ffmpeg', args);
   let errLog = '';
@@ -154,7 +209,7 @@ function processVideo(id, effect, speed, fps, forceSoftware = false) {
     if (!ok && !forceSoftware && ENCODER !== 'libx264') {
       // Encoder de hardware falhou (ex.: VAAPI sem GPU no container) -> tenta CPU.
       console.warn(`Encoder "${ENCODER}" falhou (code ${code}). Refazendo na CPU…`);
-      return processVideo(id, effect, speed, fps, true);
+      return runFfmpeg(id, effect, speed, fps, true, dims);
     }
     finishProcessing(id, ok, ok ? null : ('ffmpeg code ' + code + '\n' + errLog), input, output);
   });
